@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>pl.gorian.LovenseController</id>
+  <name>Lovense Controller</name>
+  <summary>Control Lovense toys from your computer</summary>
+  <summary xml:lang="pl">Sterowanie zabawkami Lovense z komputera</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>gorian</developer_name>
+  <description>
+    <p>
+      Desktop app to control Lovense toys over Bluetooth from Linux:
+      vibration, pump/rotate, keyboard hotkeys, react to application audio,
+      local game API, and optional remote web control for a partner.
+    </p>
+    <p xml:lang="pl">
+      Program desktopowy do sterowania zabawkami Lovense przez Bluetooth:
+      wibracje, pump/rotate, skróty klawiszowe, reakcja na dźwięk z aplikacji,
+      API do gier oraz opcjonalne zdalne sterowanie dla partnera.
+    </p>
+    <ul>
+      <li>Lush, Hush, Max/Max 2, Nora, Edge, Domi, Ambi and more</li>
+      <li>Direct BLE (no phone required)</li>
+      <li>Audio react (Firefox, games, mic)</li>
+      <li>Remote panel with share token</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">pl.gorian.LovenseController.desktop</launchable>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="sex-themes">intense</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="1.1.0" date="2026-07-27">
+      <description>
+        <p>Multi-toy support, GStreamer app-audio capture, GTK UI, Flatpak packaging.</p>
+      </description>
+    </release>
+  </releases>
+</component>

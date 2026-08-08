@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Lovense Controller
+Name[pl]=Lovense Controller
+Comment=Control Lovense toys from PC (Bluetooth, audio, remote)
+Comment[pl]=Sterowanie zabawkami Lovense z komputera (Bluetooth, dźwięk, zdalnie)
+Exec=lovense-controller
+Icon=pl.gorian.LovenseController
+Terminal=false
+Type=Application
+Categories=Utility;AudioVideo;
+Keywords=lovense;bluetooth;toy;max;lush;
+StartupNotify=true

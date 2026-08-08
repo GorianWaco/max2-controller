@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1025"/>
+      <stop offset="100%" stop-color="#0f0f18"/>
+    </linearGradient>
+    <linearGradient id="rose" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fb7185"/>
+      <stop offset="50%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#be123c"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- outer ring -->
+  <circle cx="64" cy="68" r="38" fill="none" stroke="url(#rose)" stroke-width="8"/>
+  <!-- inner pulse -->
+  <circle cx="64" cy="68" r="18" fill="url(#rose)"/>
+  <circle cx="64" cy="68" r="8" fill="#1a1025"/>
+  <!-- antenna / remote -->
+  <rect x="58" y="14" width="12" height="26" rx="5" fill="url(#rose)"/>
+  <circle cx="64" cy="14" r="6" fill="#fda4af"/>
+  <!-- signal arcs -->
+  <path d="M40 36c8-10 40-10 48 0" fill="none" stroke="#a855f7" stroke-width="3" stroke-linecap="round" opacity="0.85"/>
+  <path d="M46 28c6-7 30-7 36 0" fill="none" stroke="#c084fc" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+</svg>

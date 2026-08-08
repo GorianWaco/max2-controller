@@ -1,0 +1,8 @@
+# Notecard w SL: nazwa dokładnie "lovense.cfg" (w Contents obiektu HUD)
+
+BASE_URL=https://xxxx.trycloudflare.com
+TOKEN=wklej_token_z_gui
+CHANNEL=7
+DEFAULT_TIME=4
+# 38 = ATTACH_HUD_BOTTOM_RIGHT
+HUD=38

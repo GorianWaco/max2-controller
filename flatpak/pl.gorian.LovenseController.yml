@@ -1,0 +1,72 @@
+# Flatpak manifest — Lovense Controller
+# Build:  ./build-flatpak.sh
+# Install: flatpak install --user dist/LovenseController.flatpak
+
+app-id: pl.gorian.LovenseController
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: lovense-controller
+
+finish-args:
+  # GUI
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # Dźwięk aplikacji + mikrofon
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0:ro
+  # Bluetooth (BlueZ) + BLE
+  - --socket=system-bus
+  - --socket=session-bus
+  - --talk-name=org.bluez
+  - --talk-name=org.bluez.*
+  - --system-talk-name=org.bluez
+  - --device=all
+  # API gier + zdalne sterowanie w LAN
+  - --share=network
+  # Config użytkownika
+  - --filesystem=xdg-config/max2-controller:create
+  - --filesystem=xdg-config/lovense-controller:create
+  - --env=PYTHONUNBUFFERED=1
+
+modules:
+  # --- Python deps (pip into /app) ---
+  - name: python3-pip-deps
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - python3 -m ensurepip --upgrade || true
+      - python3 -m pip install --verbose --prefix=/app --no-cache-dir
+          requests flask pynput urllib3 "bleak>=0.22" "numpy>=1.26" sounddevice werkzeug
+    sources: []
+
+  # --- App sources ---
+  - name: lovense-controller
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/lovense-controller /app/bin
+      - cp -r src/max2_controller /app/lib/lovense-controller/
+      - install -Dm755 flatpak/lovense-controller.sh /app/bin/lovense-controller
+      - install -Dm644 flatpak/pl.gorian.LovenseController.desktop
+          /app/share/applications/pl.gorian.LovenseController.desktop
+      - install -Dm644 flatpak/pl.gorian.LovenseController.metainfo.xml
+          /app/share/metainfo/pl.gorian.LovenseController.metainfo.xml
+      - install -Dm644 flatpak/icons/hicolor/scalable/apps/pl.gorian.LovenseController.svg
+          /app/share/icons/hicolor/scalable/apps/pl.gorian.LovenseController.svg
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .venv
+          - .venv.bak.tk
+          - dist
+          - flatpak/.flatpak-builder
+          - flatpak/build
+          - flatpak/repo
+          - __pycache__
+          - '**/__pycache__'
+          - '**/*.pyc'

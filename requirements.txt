@@ -1,0 +1,13 @@
+requests>=2.31.0
+flask>=3.0.0
+pynput>=1.7.6
+urllib3>=2.0.0
+bleak>=0.22.0
+numpy>=1.26.0
+sounddevice>=0.4.6
+# GUI: PyGObject + GTK4 — pakiety SYSTEMOWE (nie pip):
+#   sudo pacman -S python-gobject gtk4 libadwaita
+# Audio: PipeWire tools (pw-record):
+#   sudo pacman -S pipewire-pulse pipewire-tools
+# venv z dostępem do systemu:
+#   python3 -m venv --system-site-packages .venv
