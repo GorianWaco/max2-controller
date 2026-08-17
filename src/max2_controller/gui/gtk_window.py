@@ -675,235 +675,67 @@ class Max2GtkApp(_AppBase):
         self.game_info = Gtk.Label(label="", wrap=True, xalign=0, selectable=True)
         sec.append(self.game_info)
 
-        # --- Link do przeglądarki (zdalne) ---
-        sec = self._section(pages["zdalne"], "Panel web (partnerka / telefon)")
+        # --- Zdalne: panel partnerki + skrypt SL ---
+        sec = self._section(pages["zdalne"], "Zdalne sterowanie")
         rem_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         rem_row.append(
-            Gtk.Label(label="Włącz panel web (dla partnerki / telefonu)", hexpand=True, xalign=0)
+            Gtk.Label(label="Udostępnij (panel + internet)", hexpand=True, xalign=0)
         )
         self.remote_sw = Gtk.Switch()
-        # nie startuj jeszcze — _initial_load ustawi wg configu (unika podwójnego startu)
         self.remote_sw.connect("notify::active", self._on_remote_sw)
         rem_row.append(self.remote_sw)
         sec.append(rem_row)
 
-        self.remote_status_lbl = Gtk.Label(
-            label="Status: wyłączone",
-            wrap=True,
-            xalign=0,
-        )
+        self.remote_status_lbl = Gtk.Label(label="Wyłączone", wrap=True, xalign=0)
         sec.append(self.remote_status_lbl)
 
-        sec.append(Gtk.Label(label="Link dla partnerki (ta sama Wi‑Fi):", xalign=0))
-        self.remote_link_entry = Gtk.Entry()
-        self.remote_link_entry.set_editable(False)
-        self.remote_link_entry.set_placeholder_text("Włącz przełącznik — tu pojawi się link do skopiowania")
-        self.remote_link_entry.set_hexpand(True)
-        sec.append(self.remote_link_entry)
-
-        self.remote_info = Gtk.Label(
-            label="Wyłączone. Po włączeniu wyślij link partnerce — otworzy panel w przeglądarce (telefon/PC).",
-            wrap=True,
-            xalign=0,
-            selectable=True,
-        )
-        sec.append(self.remote_info)
-
-        tok_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        for label, cb in (
-            ("Kopiuj link Wi‑Fi", self._copy_remote_link),
-            ("Pokaż QR / share", self._open_remote_share),
-            ("Test połączenia", self._test_remote_health),
-            ("Otwórz u mnie", self._open_remote_browser),
-            ("Nowy link (token)", self._regen_remote_token),
-        ):
-            b = Gtk.Button(label=label)
-            b.connect("clicked", lambda _w, c=cb: c())
-            tok_row.append(b)
-        sec.append(tok_row)
-
-        # --- Internet (inne miasto / LTE) ---
-        sec_net = self._section(pages["zdalne"], "Udostępnij przez internet (inne miasto)")
-        self.internet_status_lbl = Gtk.Label(
-            label="Internet: wyłączone — partnerka spoza Wi‑Fi nie połączy się linkiem 192.168.…",
-            wrap=True,
-            xalign=0,
-        )
-        sec_net.append(self.internet_status_lbl)
-
-        mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        mode_row.append(Gtk.Label(label="Tryb tunnelu:", xalign=0))
-        self.tunnel_mode_dd = Gtk.DropDown.new_from_strings(
-            [
-                "Quick Cloudflare (przeglądarka; SL często blokowany)",
-                "Named — stały hostname (domena Cloudflare)",
-                "Token — Zero Trust (wklej token)",
-                "ngrok — polecane do Second Life",
-                "Tailscale Funnel — SL + przeglądarka",
-                "SSH localhost.run — fallback pod SL",
-            ]
-        )
-        mode_map = {
-            "quick": 0,
-            "named": 1,
-            "token": 2,
-            "ngrok": 3,
-            "funnel": 4,
-            "ssh": 5,
-            "localhost.run": 5,
-        }
-        self.tunnel_mode_dd.set_selected(mode_map.get((self.config.tunnel_mode or "quick").lower(), 0))
-        self.tunnel_mode_dd.set_hexpand(True)
-        self.tunnel_mode_dd.connect("notify::selected", self._on_tunnel_mode_dd)
-        mode_row.append(self.tunnel_mode_dd)
-        sec_net.append(mode_row)
-
-        sec_net.append(Gtk.Label(label="Hostname (named) — np. lovense.twojadomena.com:", xalign=0))
-        self.tunnel_host_entry = Gtk.Entry()
-        self.tunnel_host_entry.set_text(self.config.tunnel_hostname or "")
-        self.tunnel_host_entry.set_placeholder_text("lovense.example.com (musi być w Cloudflare DNS)")
-        self.tunnel_host_entry.set_hexpand(True)
-        self.tunnel_host_entry.connect("changed", lambda *_: self._save_tunnel_fields())
-        sec_net.append(self.tunnel_host_entry)
-
-        sec_net.append(Gtk.Label(label="Token Zero Trust (tryb Token):", xalign=0))
-        self.tunnel_token_entry = Gtk.Entry()
-        self.tunnel_token_entry.set_text(self.config.tunnel_token or "")
-        self.tunnel_token_entry.set_placeholder_text("eyJh… (z Cloudflare One → Tunnels)")
-        self.tunnel_token_entry.set_hexpand(True)
-        self.tunnel_token_entry.set_visibility(False)
-        self.tunnel_token_entry.connect("changed", lambda *_: self._save_tunnel_fields())
-        sec_net.append(self.tunnel_token_entry)
-
-        sec_net.append(Gtk.Label(label="Publiczny URL (zapisany / stały):", xalign=0))
-        self.internet_link_entry = Gtk.Entry()
-        self.internet_link_entry.set_placeholder_text("https://…/r/TOKEN — po starcie tunnelu")
-        if self.config.tunnel_public_url:
-            from max2_controller.internet_share import build_public_panel_link
-
-            self.internet_link_entry.set_text(
-                build_public_panel_link(self.config.tunnel_public_url, self.config.remote_token)
-            )
-        self.internet_link_entry.set_hexpand(True)
-        sec_net.append(self.internet_link_entry)
-
-        auto_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        auto_row.append(
-            Gtk.Label(label="Auto-start panelu web + tunelu przy starcie programu", hexpand=True, xalign=0)
-        )
-        self.tunnel_auto_sw = Gtk.Switch()
-        self.tunnel_auto_sw.set_active(bool(self.config.tunnel_auto_start))
-        self.tunnel_auto_sw.connect("notify::active", self._on_tunnel_auto_sw)
-        auto_row.append(self.tunnel_auto_sw)
-        sec_net.append(auto_row)
-
-        sec_net.append(Gtk.Label(label="Link Tailscale (opcjonalnie):", xalign=0))
-        self.tailscale_link_entry = Gtk.Entry()
-        self.tailscale_link_entry.set_editable(False)
-        self.tailscale_link_entry.set_placeholder_text("tailscale up u Ciebie i u partnerki…")
-        self.tailscale_link_entry.set_hexpand(True)
-        sec_net.append(self.tailscale_link_entry)
-
-        net_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self._btn_internet_share = Gtk.Button(label="▶  Udostępnij przez internet")
-        self._btn_internet_share.add_css_class("suggested-action")
-        self._btn_internet_share.connect("clicked", lambda *_: self._start_internet_share())
-        net_btn_row.append(self._btn_internet_share)
-        for label, cb in (
-            ("Zatrzymaj", self._stop_internet_share),
-            ("Kopiuj link", self._copy_internet_link),
-            ("Login Cloudflare", self._cloudflare_login),
-            ("Tailscale", self._refresh_tailscale_link),
-        ):
-            b = Gtk.Button(label=label)
-            b.connect("clicked", lambda _w, c=cb: c())
-            net_btn_row.append(b)
-        sec_net.append(net_btn_row)
-
-        net_hint = Gtk.Label(
-            label=(
-                "Przeglądarka: Quick Cloudflare zwykle działa.\n"
-                "Second Life HUD: grid woła z IP Amazona — Cloudflare Bot Fight często daje 403. "
-                "Do HUD użyj ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) / localhost.run.\n"
-                "Named: domena w Cloudflare → Hostname → Login (raz) → Udostępnij.\n"
-                "Auto-start włącza panel web + tunnel przy starcie programu."
-            ),
-            wrap=True,
-            xalign=0,
-        )
-        net_hint.add_css_class("dim-label")
-        sec_net.append(net_hint)
-        GLib.idle_add(self._refresh_tailscale_link_quiet)
-
-        # --- Sesje remote (kto online, kick, uprawnienia) ---
-        self._build_sessions_page(pages["sesje"])
-
-        # --- Second Life ---
-        sec = self._section(pages["zdalne"], "Second Life (skrypt LSL)")
-        sl_hint = Gtk.Label(
-            label=(
-                "Skrypt jest pod HUD (kafelek na ekranie w SL).\n"
-                "1) Panel web WŁ + tunel HTTPS (ngrok/Funnel, nie samo 192.168)  "
-                "2) „Kopiuj skrypt LSL” → wklej w prymityw  "
-                "3) Wear / Attach to HUD (prawy dół)  4) Dotyk HUD = menu.\n"
-                "Grid SL nie widzi 192.168 / localhost. Quick Cloudflare często blokuje LSL (Bot Fight)."
-            ),
-            wrap=True,
-            xalign=0,
-        )
-        sl_hint.add_css_class("dim-label")
-        sec.append(sl_hint)
-
-        sec.append(Gtk.Label(label="BASE_URL (LAN — ta sieć Wi‑Fi):", xalign=0))
-        self.sl_base_entry = Gtk.Entry()
-        self.sl_base_entry.set_editable(False)
-        self.sl_base_entry.set_hexpand(True)
-        sec.append(self.sl_base_entry)
-
-        sec.append(Gtk.Label(label="TOKEN (remote):", xalign=0))
-        self.sl_token_entry = Gtk.Entry()
-        self.sl_token_entry.set_editable(False)
-        self.sl_token_entry.set_hexpand(True)
-        sec.append(self.sl_token_entry)
-
-        sec.append(Gtk.Label(label="Przykład wywołania (test w przeglądarce / curl):", xalign=0))
-        self.sl_example_entry = Gtk.Entry()
-        self.sl_example_entry.set_editable(False)
-        self.sl_example_entry.set_hexpand(True)
-        sec.append(self.sl_example_entry)
-
-        tunnel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        tunnel_row.append(Gtk.Label(label="Publiczny URL (tunnel, opcjonalnie):", xalign=0))
-        self.sl_tunnel_entry = Gtk.Entry()
-        self.sl_tunnel_entry.set_placeholder_text("https://xxxx.trycloudflare.com")
-        self.sl_tunnel_entry.set_hexpand(True)
-        if self.config.tunnel_public_url:
-            self.sl_tunnel_entry.set_text(self.config.tunnel_public_url.rstrip("/"))
-        self.sl_tunnel_entry.connect("changed", lambda *_: self._update_sl_ui())
-        tunnel_row.append(self.sl_tunnel_entry)
-        sec.append(tunnel_row)
+        sec.append(Gtk.Label(label="Adres dla partnerki (przeglądarka):", xalign=0))
+        url_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.partner_url_entry = Gtk.Entry()
+        self.partner_url_entry.set_editable(False)
+        self.partner_url_entry.set_placeholder_text("Włącz udostępnianie — tu pojawi się link")
+        self.partner_url_entry.set_hexpand(True)
+        url_row.append(self.partner_url_entry)
+        copy_url_btn = Gtk.Button(label="Kopiuj adres")
+        copy_url_btn.add_css_class("suggested-action")
+        copy_url_btn.connect("clicked", lambda *_: self._copy_partner_url())
+        url_row.append(copy_url_btn)
+        sec.append(url_row)
 
         sl_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        for label, cb in (
-            ("Kopiuj BASE_URL", self._copy_sl_base),
-            ("Kopiuj TOKEN", self._copy_sl_token),
-            ("Kopiuj skrypt LSL", self._copy_sl_script),
-            ("Kopiuj notecard cfg", self._copy_sl_notecard),
-            ("Test /sl/status", self._test_sl_status),
-            ("Diagnostyka SL", self._diagnose_sl_connection),
-        ):
-            b = Gtk.Button(label=label)
-            b.connect("clicked", lambda _w, c=cb: c())
-            sl_btns.append(b)
+        copy_lsl = Gtk.Button(label="Kopiuj skrypt LSL")
+        copy_lsl.connect("clicked", lambda *_: self._copy_sl_script())
+        sl_btns.append(copy_lsl)
+        copy_note = Gtk.Button(label="Kopiuj notatkę (token + URL)")
+        copy_note.connect("clicked", lambda *_: self._copy_sl_notecard())
+        sl_btns.append(copy_note)
         sec.append(sl_btns)
 
         self.sl_info = Gtk.Label(
-            label="Włącz panel zdalny powyżej, aby aktywować API /sl/* dla Second Life.",
+            label=(
+                "Włącz przełącznik. Partnerka otwiera adres w przeglądarce.\n"
+                "W SL: skrypt wklej do HUD, notatkę wrzuć jako lovense.cfg."
+            ),
             wrap=True,
             xalign=0,
             selectable=True,
         )
+        self.sl_info.add_css_class("dim-label")
         sec.append(self.sl_info)
+
+        # aliasy / ukryte pola — stary kod tunelu nadal je uzupełnia
+        self.remote_link_entry = self.partner_url_entry
+        self.internet_link_entry = self.partner_url_entry
+        self.remote_info = self.sl_info
+        self.sl_tunnel_entry = Gtk.Entry()
+        if self.config.tunnel_public_url:
+            self.sl_tunnel_entry.set_text(self.config.tunnel_public_url.rstrip("/"))
+        self.sl_base_entry = Gtk.Entry()
+        self.sl_token_entry = Gtk.Entry()
+        self.sl_example_entry = Gtk.Entry()
+        self.internet_status_lbl = self.remote_status_lbl
+
+        self._build_sessions_page(pages["sesje"])
         self._update_sl_ui()
 
         # Log
@@ -1796,26 +1628,29 @@ class Max2GtkApp(_AppBase):
 
         return build_remote_links(self.config)
 
+    def _partner_url(self) -> str:
+        from max2_controller.internet_share import build_public_panel_link
+        from max2_controller.remote_links import is_public_https_url
+
+        base = self._sl_base_url()
+        if is_public_https_url(base):
+            return build_public_panel_link(base, self.config.remote_token)
+        return self._remote_links().lan
+
     def _update_remote_link_ui(self) -> None:
-        links = self._remote_links()
-        self.remote_link_entry.set_text(links.lan)
+        url = self._partner_url()
+        if hasattr(self, "partner_url_entry"):
+            self.partner_url_entry.set_text(url)
         running = bool(self._remote_handle and self._remote_handle.running)
+        tun = getattr(self, "_internet_tunnel", None)
+        tun_on = bool(tun and tun.running and getattr(tun, "public_base", None))
         if hasattr(self, "remote_status_lbl"):
-            if running:
-                self.remote_status_lbl.set_text(
-                    f"Status: ONLINE · 0.0.0.0:{links.port} · IP: {links.host_ip}"
-                )
+            if running and tun_on:
+                self.remote_status_lbl.set_text("Online — wyślij adres partnerce")
+            elif running:
+                self.remote_status_lbl.set_text("Panel włączony — czekam na publiczny adres…")
             else:
-                self.remote_status_lbl.set_text("Status: wyłączone / nie nasłuchuje")
-        self.remote_info.set_text(
-            f"Wyślij ten link (Wi‑Fi / LAN):\n{links.lan}\n\n"
-            f"Test z telefonu (bez tokenu):\n"
-            f"http://{links.host_ip}:{links.port}/health\n\n"
-            f"QR / share (na tym PC):\n"
-            f"http://127.0.0.1:{links.port}/share?token=…\n\n"
-            f"Na tym PC (test panelu):\n{links.local}\n\n"
-            f"Przez internet — tunnel na port {links.port}, potem doklej {links.path_short}"
-        )
+                self.remote_status_lbl.set_text("Wyłączone")
         self._update_sl_ui()
 
     def _sl_base_url(self) -> str:
@@ -1844,42 +1679,37 @@ class Max2GtkApp(_AppBase):
         return base or links.sl_base_lan
 
     def _update_sl_ui(self) -> None:
-        if not hasattr(self, "sl_base_entry"):
-            return
-        links = self._remote_links()
-        base = self._sl_base_url()
-        from urllib.parse import quote
-
-        tok_q = quote(links.token, safe="")
-        self.sl_base_entry.set_text(base)
-        self.sl_token_entry.set_text(links.token)
-        self.sl_example_entry.set_text(f"{base}/sl/vibrate?token={tok_q}&level=8&time=3")
         from max2_controller.remote_links import is_public_https_url
 
+        base = self._sl_base_url()
+        url = self._partner_url()
+        if hasattr(self, "partner_url_entry") and url:
+            self.partner_url_entry.set_text(url)
+        if hasattr(self, "sl_base_entry"):
+            self.sl_base_entry.set_text(base)
+        if hasattr(self, "sl_token_entry"):
+            self.sl_token_entry.set_text(self.config.remote_token)
+        if not hasattr(self, "sl_info"):
+            return
         active = bool(
             self.config.remote_enabled
             or self.controller.state.remote_active
             or (self._remote_handle and self._remote_handle.running)
         )
-        public = is_public_https_url(base)
-        if active and public:
+        if not active:
             self.sl_info.set_text(
-                f"API Second Life aktywne (publiczny HTTPS).\n"
-                f"  BASE_URL = {base}\n"
-                f"  Komendy: {base}/sl/help\n"
-                f"  Wworld: /7 stop | /7 v 12 | /7 i 0.5 | /7 preset pulse\n"
-                f"  Skrypt: „Kopiuj skrypt LSL”. Jeśli HUD dostaje 403 — zmień tunel na ngrok/Funnel."
+                "Włącz przełącznik. Partnerka otwiera adres w przeglądarce.\n"
+                "W SL: skrypt wklej do HUD, notatkę wrzuć jako lovense.cfg."
             )
-        elif active:
+        elif is_public_https_url(base):
             self.sl_info.set_text(
-                f"Panel WŁ, ale BASE_URL jest prywatny ({base}).\n"
-                f"Grid SL NIE połączy HUD z 192.168 / localhost. "
-                f"Kliknij „Udostępnij przez internet” (ngrok / Funnel do HUD)."
+                "Adres wyślij partnerce. W SL: skrypt → Contents HUD, "
+                "notatka → lovense.cfg (token + URL już w środku)."
             )
         else:
             self.sl_info.set_text(
-                "Panel zdalny WYŁĄCZONY — włącz przełącznik powyżej, "
-                "potem tunel HTTPS. Token i BASE możesz skopiować, ale HUD nie zadziała bez panelu."
+                "Czekam na publiczny adres internetowy… "
+                "Potem skopiuj skrypt i notatkę (LAN nie zadziała z gridu SL)."
             )
 
     def _alert(self, title: str, detail: str) -> None:
@@ -1921,20 +1751,25 @@ class Max2GtkApp(_AppBase):
         self._clipboard_set(self.config.remote_token)
         self.controller.log("Skopiowano TOKEN do schowka")
 
+    def _copy_partner_url(self) -> None:
+        if not self.remote_sw.get_active():
+            self.remote_sw.set_active(True)
+        url = self._partner_url()
+        if hasattr(self, "partner_url_entry"):
+            self.partner_url_entry.set_text(url)
+        self._clipboard_set(url)
+        self.controller.log(f"Skopiowano adres partnerki: {url}")
+
     def _copy_sl_script(self) -> None:
         from max2_controller.remote_links import is_public_https_url
         from max2_controller.secondlife import load_lsl_template
 
+        if not self.remote_sw.get_active():
+            self.remote_sw.set_active(True)
         base = self._sl_base_url()
         if not is_public_https_url(base):
-            self._alert(
-                "Second Life nie dosięgnie tego URL",
-                f"BASE_URL = {base or '(pusty)'}\n\n"
-                "Grid SL blokuje 192.168 / localhost. "
-                "Najpierw: panel web WŁ → Udostępnij przez internet "
-                "(ngrok / Tailscale Funnel / Named).\n"
-                "Quick Cloudflare często daje HUD 403 (Bot Fight).\n\n"
-                "Kopiuję skrypt mimo to — HUD poprosi o HTTPS przy starcie.",
+            self.controller.log(
+                "Brak publicznego HTTPS — poczekaj aż pojawi się adres, potem skopiuj skrypt ponownie."
             )
         script = load_lsl_template(base_url=base, token=self.config.remote_token)
         self._clipboard_set(script)
@@ -1953,7 +1788,13 @@ class Max2GtkApp(_AppBase):
         """Notecard lovense.cfg — wrzuć do obiektu w SL zamiast edytować skrypt."""
         from max2_controller.secondlife import notecard_example
 
-        text = notecard_example(base_url=self._sl_base_url(), token=self.config.remote_token)
+        if not self.remote_sw.get_active():
+            self.remote_sw.set_active(True)
+        text = notecard_example(
+            base_url=self._sl_base_url(),
+            token=self.config.remote_token,
+            panel_url=self._partner_url(),
+        )
         self._clipboard_set(text)
         try:
             from max2_controller.config import CONFIG_DIR
@@ -2085,11 +1926,7 @@ class Max2GtkApp(_AppBase):
             return
         self.controller.state.remote_active = True
         self._update_remote_link_ui()
-        links = self._remote_links()
-        self.controller.log("Zdalne sterowanie WŁĄCZONE — link w polu powyżej")
-        self.controller.log(f"Link Wi‑Fi (dla partnerki): {links.lan}")
-        self.controller.log(f"Test z telefonu: http://{links.host_ip}:{links.port}/health")
-        self.controller.log(f"Second Life API: {links.sl_base_lan}/sl/help")
+        self.controller.log("Zdalne sterowanie włączone")
 
     def _stop_remote(self) -> None:
         self._stop_internet_share(silent=True)
@@ -2099,22 +1936,22 @@ class Max2GtkApp(_AppBase):
         self.config.remote_enabled = False
         self.config.save()
         self._update_sl_ui()
-        self.remote_link_entry.set_text("")
-        self.remote_info.set_text(
-            "Wyłączone. Po włączeniu wyślij link partnerce — otworzy panel w przeglądarce."
-        )
+        if hasattr(self, "partner_url_entry"):
+            self.partner_url_entry.set_text("")
         if hasattr(self, "remote_status_lbl"):
-            self.remote_status_lbl.set_text("Status: wyłączone")
+            self.remote_status_lbl.set_text("Wyłączone")
         self.controller.log("Zdalne sterowanie wyłączone")
 
     def _on_remote_sw(self, *_args) -> None:
         if self._remote_sw_guard:
             return
         if self.remote_sw.get_active():
-            self.controller.log(
-                "Link z tokenem pozwala sterować zabawką — wysyłaj tylko zaufanym osobom."
-            )
+            self.config.tunnel_auto_start = True
+            self.config.save()
+            self.controller.log("Udostępniam — tylko zaufanej osobie.")
             self._start_remote()
+            if self._remote_handle and self._remote_handle.running:
+                self._start_internet_share()
         else:
             self._stop_remote()
 
@@ -2613,9 +2450,9 @@ class Max2GtkApp(_AppBase):
         if hasattr(self, "sl_tunnel_entry"):
             self.sl_tunnel_entry.set_text(base)
             self._update_sl_ui()
-        self.controller.log(f"Link internetowy dla partnerki ({stable}):\n  {panel}")
+        self.controller.log(f"Adres partnerki: {panel}")
         self._clipboard_set(panel)
-        self.controller.log("✓ Link skopiowany do schowka")
+        self._update_remote_link_ui()
         # po starcie tunelu sprawdź, czy LSL z gridu nie dostanie Cloudflare 403
         token = self.config.remote_token
 
@@ -2624,15 +2461,8 @@ class Max2GtkApp(_AppBase):
 
             result = probe_sl_http(base, token)
             if result.get("sl_blocked"):
-                self.controller.log(f"⚠ Second Life: {result.get('message')}")
-                self._ui(
-                    lambda: self.sl_info.set_text(
-                        "Tunel działa w przeglądarce, ale Cloudflare blokuje HUD SL.\n"
-                        "Zmień tryb na ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) "
-                        "i kliknij Udostępnij ponownie."
-                    )
-                    if hasattr(self, "sl_info")
-                    else None
+                self.controller.log(
+                    "Cloudflare może blokować HUD SL — przeglądarka partnerki powinna działać."
                 )
             elif result.get("ok"):
                 self.controller.log("✓ Tunel odpowiada także z User-Agent Second Life")

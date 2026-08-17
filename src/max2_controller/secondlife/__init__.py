@@ -27,12 +27,15 @@ def load_lsl_template(*, base_url: str = "", token: str = "") -> str:
     return text
 
 
-def notecard_example(*, base_url: str = "", token: str = "") -> str:
+def notecard_example(*, base_url: str = "", token: str = "", panel_url: str = "") -> str:
     """Treść notecard lovense.cfg do wrzucenia w obiekt SL."""
     bu = (base_url or "https://xxxx.trycloudflare.com").rstrip("/")
     tok = token or "WKLEJ_TOKEN_Z_GUI"
+    panel = (panel_url or "").strip()
+    extra = f"# PANEL={panel}\n" if panel else ""
     return (
-        "# lovense.cfg — konfiguracja mostka SL (bez edycji skryptu)\n"
+        "# lovense.cfg — wrzuć do Contents HUD (ta sama nazwa)\n"
+        f"{extra}"
         f"BASE_URL={bu}\n"
         f"TOKEN={tok}\n"
         "CHANNEL=7\n"

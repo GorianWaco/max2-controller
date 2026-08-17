@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0 — 2026-08-17
+
+Zdalne sterowanie: jeden przełącznik, adres panelu partnerki, kopiowanie skryptu LSL i notatki z tokenem. Tunel startuje w tle.
+
 ## 1.4.0 — 2026-08-17
 
 Po świeżej instalacji Linuksa HUD w Second Life i panel w przeglądarce nie łączyły się.
