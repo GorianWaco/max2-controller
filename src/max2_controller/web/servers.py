@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from flask import Flask, Response, jsonify, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 if TYPE_CHECKING:
     from max2_controller.controller import Max2Controller
@@ -210,6 +211,10 @@ def create_game_app(controller: "Max2Controller", config: "AppConfig") -> Flask:
 def create_remote_app(controller: "Max2Controller", config: "AppConfig") -> Flask:
     app = Flask("max2-remote")
     app.config["JSON_SORT_KEYS"] = False
+    app.config["TRUSTED_HOSTS"] = None
+    # cloudflared / ngrok kończą TLS i wołają nas po HTTP — bez tego
+    # request.host_url jest http:// mimo publicznego https://
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     sessions = controller.remote_sessions
 
     def _auth() -> bool:
@@ -268,7 +273,9 @@ def create_remote_app(controller: "Max2Controller", config: "AppConfig") -> Flas
     def _cors(resp: Response):
         # panel i API z tego samego origin — CORS na wypadek proxy / tunnel
         resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Token, Authorization"
+        resp.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, X-API-Token, Authorization, X-Session-Id"
+        )
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Cache-Control"] = "no-store"
         return resp
@@ -276,6 +283,8 @@ def create_remote_app(controller: "Max2Controller", config: "AppConfig") -> Flas
     @app.route("/api/control", methods=["OPTIONS"])
     @app.route("/api/status", methods=["OPTIONS"])
     @app.route("/api/session/join", methods=["OPTIONS"])
+    @app.route("/api/session/leave", methods=["OPTIONS"])
+    @app.route("/sl/status", methods=["OPTIONS"])
     def _cors_preflight():
         return Response(status=204)
 
@@ -324,6 +333,24 @@ def create_remote_app(controller: "Max2Controller", config: "AppConfig") -> Flas
                     config.remote_enabled or getattr(controller.state, "remote_active", False)
                 ),
                 "port": int(config.remote_port),
+            }
+        )
+
+    @app.get("/diag")
+    def diag_public():
+        """Diagnostyka tunelu: jaki Host/scheme widzi serwer (bez tokenu)."""
+        return jsonify(
+            {
+                "ok": True,
+                "service": "lovense-remote",
+                "host": request.host,
+                "scheme": request.scheme,
+                "url": request.url,
+                "forwarded_proto": request.headers.get("X-Forwarded-Proto") or "",
+                "forwarded_host": request.headers.get("X-Forwarded-Host") or "",
+                "remote_enabled": bool(
+                    config.remote_enabled or getattr(controller.state, "remote_active", False)
+                ),
             }
         )
 
@@ -630,7 +657,7 @@ code{{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-si
     # Second Life (LSL) — GET/POST z tokenem w query
     from max2_controller.web.secondlife_api import register_secondlife_routes
 
-    register_secondlife_routes(app, controller, config, token_attr="remote_token", require_remote_on=True)
+    register_secondlife_routes(app, controller, config, token_attr="remote_token", require_remote_on=False)
 
     return app
 

@@ -735,12 +735,23 @@ class Max2GtkApp(_AppBase):
         mode_row.append(Gtk.Label(label="Tryb tunnelu:", xalign=0))
         self.tunnel_mode_dd = Gtk.DropDown.new_from_strings(
             [
-                "Quick (losowy URL, bez konta)",
+                "Quick Cloudflare (przeglądarka; SL często blokowany)",
                 "Named — stały hostname (domena Cloudflare)",
                 "Token — Zero Trust (wklej token)",
+                "ngrok — polecane do Second Life",
+                "Tailscale Funnel — SL + przeglądarka",
+                "SSH localhost.run — fallback pod SL",
             ]
         )
-        mode_map = {"quick": 0, "named": 1, "token": 2}
+        mode_map = {
+            "quick": 0,
+            "named": 1,
+            "token": 2,
+            "ngrok": 3,
+            "funnel": 4,
+            "ssh": 5,
+            "localhost.run": 5,
+        }
         self.tunnel_mode_dd.set_selected(mode_map.get((self.config.tunnel_mode or "quick").lower(), 0))
         self.tunnel_mode_dd.set_hexpand(True)
         self.tunnel_mode_dd.connect("notify::selected", self._on_tunnel_mode_dd)
@@ -778,7 +789,7 @@ class Max2GtkApp(_AppBase):
 
         auto_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         auto_row.append(
-            Gtk.Label(label="Auto-start tunnelu przy włączaniu panelu remote", hexpand=True, xalign=0)
+            Gtk.Label(label="Auto-start panelu web + tunelu przy starcie programu", hexpand=True, xalign=0)
         )
         self.tunnel_auto_sw = Gtk.Switch()
         self.tunnel_auto_sw.set_active(bool(self.config.tunnel_auto_start))
@@ -811,11 +822,11 @@ class Max2GtkApp(_AppBase):
 
         net_hint = Gtk.Label(
             label=(
-                "Quick: losowy URL (bez konta) — zmienia się po restarcie.\n"
-                "Named (stały): domena w Cloudflare → Hostname → Login Cloudflare (raz) → Udostępnij.\n"
-                "  URL zawsze: https://hostname/r/TOKEN\n"
-                "Token: w Cloudflare Zero Trust utwórz tunnel, wklej token + Publiczny hostname w polu URL.\n"
-                "Partnerka (panel): Opcje → czułość/gain audio na żywo."
+                "Przeglądarka: Quick Cloudflare zwykle działa.\n"
+                "Second Life HUD: grid woła z IP Amazona — Cloudflare Bot Fight często daje 403. "
+                "Do HUD użyj ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) / localhost.run.\n"
+                "Named: domena w Cloudflare → Hostname → Login (raz) → Udostępnij.\n"
+                "Auto-start włącza panel web + tunnel przy starcie programu."
             ),
             wrap=True,
             xalign=0,
@@ -832,9 +843,10 @@ class Max2GtkApp(_AppBase):
         sl_hint = Gtk.Label(
             label=(
                 "Skrypt jest pod HUD (kafelek na ekranie w SL).\n"
-                "1) Panel web WŁ + tunnel HTTPS  2) „Kopiuj skrypt LSL” → wklej w mały prymityw  "
+                "1) Panel web WŁ + tunel HTTPS (ngrok/Funnel, nie samo 192.168)  "
+                "2) „Kopiuj skrypt LSL” → wklej w prymityw  "
                 "3) Wear / Attach to HUD (prawy dół)  4) Dotyk HUD = menu.\n"
-                "Grid nie widzi 192.168.x — użyj „Udostępnij przez internet”."
+                "Grid SL nie widzi 192.168 / localhost. Quick Cloudflare często blokuje LSL (Bot Fight)."
             ),
             wrap=True,
             xalign=0,
@@ -865,6 +877,8 @@ class Max2GtkApp(_AppBase):
         self.sl_tunnel_entry = Gtk.Entry()
         self.sl_tunnel_entry.set_placeholder_text("https://xxxx.trycloudflare.com")
         self.sl_tunnel_entry.set_hexpand(True)
+        if self.config.tunnel_public_url:
+            self.sl_tunnel_entry.set_text(self.config.tunnel_public_url.rstrip("/"))
         self.sl_tunnel_entry.connect("changed", lambda *_: self._update_sl_ui())
         tunnel_row.append(self.sl_tunnel_entry)
         sec.append(tunnel_row)
@@ -876,6 +890,7 @@ class Max2GtkApp(_AppBase):
             ("Kopiuj skrypt LSL", self._copy_sl_script),
             ("Kopiuj notecard cfg", self._copy_sl_notecard),
             ("Test /sl/status", self._test_sl_status),
+            ("Diagnostyka SL", self._diagnose_sl_connection),
         ):
             b = Gtk.Button(label=label)
             b.connect("clicked", lambda _w, c=cb: c())
@@ -954,13 +969,13 @@ class Max2GtkApp(_AppBase):
                 self.game_sw.set_active(True)
             elif not (self._game_handle and self._game_handle.running):
                 self._start_game_api()
-        # Wznów panel remote po restarcie aplikacji (wcześniej ginął mimo configu)
-        if self.config.remote_enabled:
+        # Wznów panel remote po restarcie. Auto-start tunelu wymaga też panelu.
+        want_remote = bool(self.config.remote_enabled or self.config.tunnel_auto_start)
+        if want_remote:
             if not self.remote_sw.get_active():
                 self.remote_sw.set_active(True)
             elif not (self._remote_handle and self._remote_handle.running):
                 self._start_remote()
-            # stały tunnel przy starcie (named/token/quick)
             if self.config.tunnel_auto_start:
                 GLib.timeout_add(800, self._auto_start_tunnel_once)
         return False
@@ -1804,14 +1819,29 @@ class Max2GtkApp(_AppBase):
         self._update_sl_ui()
 
     def _sl_base_url(self) -> str:
-        """Baza dla LSL: najpierw tunnel z pola, inaczej LAN."""
-        tunnel = ""
+        """Baza dla LSL: publiczny HTTPS tunelu, dopiero potem LAN (grid go nie widzi)."""
+        from max2_controller.internet_share import panel_base_from_link
+        from max2_controller.remote_links import pick_sl_base_url
+
+        live = ""
+        tun = getattr(self, "_internet_tunnel", None)
+        if tun is not None and getattr(tun, "public_base", None):
+            live = str(tun.public_base)
+        field = ""
         if hasattr(self, "sl_tunnel_entry"):
-            tunnel = (self.sl_tunnel_entry.get_text() or "").strip().rstrip("/")
-        if tunnel:
-            return tunnel
+            field = (self.sl_tunnel_entry.get_text() or "").strip()
+        internet = ""
+        if hasattr(self, "internet_link_entry"):
+            internet = panel_base_from_link(self.internet_link_entry.get_text() or "")
         links = self._remote_links()
-        return links.sl_base_lan
+        base, _pub = pick_sl_base_url(
+            field,
+            live,
+            self.config.tunnel_public_url or "",
+            internet,
+            lan_fallback=links.sl_base_lan,
+        )
+        return base or links.sl_base_lan
 
     def _update_sl_ui(self) -> None:
         if not hasattr(self, "sl_base_entry"):
@@ -1824,20 +1854,43 @@ class Max2GtkApp(_AppBase):
         self.sl_base_entry.set_text(base)
         self.sl_token_entry.set_text(links.token)
         self.sl_example_entry.set_text(f"{base}/sl/vibrate?token={tok_q}&level=8&time=3")
-        active = bool(self.config.remote_enabled or self.controller.state.remote_active)
-        if active:
+        from max2_controller.remote_links import is_public_https_url
+
+        active = bool(
+            self.config.remote_enabled
+            or self.controller.state.remote_active
+            or (self._remote_handle and self._remote_handle.running)
+        )
+        public = is_public_https_url(base)
+        if active and public:
             self.sl_info.set_text(
-                f"API Second Life aktywne.\n"
+                f"API Second Life aktywne (publiczny HTTPS).\n"
                 f"  BASE_URL = {base}\n"
                 f"  Komendy: {base}/sl/help\n"
                 f"  Wworld: /7 stop | /7 v 12 | /7 i 0.5 | /7 preset pulse\n"
-                f"  Skrypt: przycisk „Kopiuj skrypt LSL” (wypełnia BASE+TOKEN)."
+                f"  Skrypt: „Kopiuj skrypt LSL”. Jeśli HUD dostaje 403 — zmień tunel na ngrok/Funnel."
+            )
+        elif active:
+            self.sl_info.set_text(
+                f"Panel WŁ, ale BASE_URL jest prywatny ({base}).\n"
+                f"Grid SL NIE połączy HUD z 192.168 / localhost. "
+                f"Kliknij „Udostępnij przez internet” (ngrok / Funnel do HUD)."
             )
         else:
             self.sl_info.set_text(
                 "Panel zdalny WYŁĄCZONY — włącz przełącznik powyżej, "
-                "inaczej /sl/* zwraca 403. Token i BASE i tak możesz skopiować."
+                "potem tunel HTTPS. Token i BASE możesz skopiować, ale HUD nie zadziała bez panelu."
             )
+
+    def _alert(self, title: str, detail: str) -> None:
+        try:
+            dialog = Gtk.AlertDialog()
+            dialog.set_message(title)
+            dialog.set_detail(detail)
+            dialog.set_modal(True)
+            dialog.show(self.win)
+        except Exception:
+            self.controller.log(f"{title}: {detail}")
 
     def _clipboard_set(self, text: str) -> None:
         display = None
@@ -1869,9 +1922,21 @@ class Max2GtkApp(_AppBase):
         self.controller.log("Skopiowano TOKEN do schowka")
 
     def _copy_sl_script(self) -> None:
+        from max2_controller.remote_links import is_public_https_url
         from max2_controller.secondlife import load_lsl_template
 
-        script = load_lsl_template(base_url=self._sl_base_url(), token=self.config.remote_token)
+        base = self._sl_base_url()
+        if not is_public_https_url(base):
+            self._alert(
+                "Second Life nie dosięgnie tego URL",
+                f"BASE_URL = {base or '(pusty)'}\n\n"
+                "Grid SL blokuje 192.168 / localhost. "
+                "Najpierw: panel web WŁ → Udostępnij przez internet "
+                "(ngrok / Tailscale Funnel / Named).\n"
+                "Quick Cloudflare często daje HUD 403 (Bot Fight).\n\n"
+                "Kopiuję skrypt mimo to — HUD poprosi o HTTPS przy starcie.",
+            )
+        script = load_lsl_template(base_url=base, token=self.config.remote_token)
         self._clipboard_set(script)
         # też zapisz obok configu — wygodne wklejenie z pliku
         try:
@@ -1908,7 +1973,11 @@ class Max2GtkApp(_AppBase):
         import urllib.request
         from urllib.parse import quote
 
-        if not (self.config.remote_enabled or self.controller.state.remote_active):
+        if not (
+            self.config.remote_enabled
+            or self.controller.state.remote_active
+            or (self._remote_handle and self._remote_handle.running)
+        ):
             self.controller.log("Najpierw włącz panel zdalny")
             return
         url = (
@@ -1920,11 +1989,67 @@ class Max2GtkApp(_AppBase):
             try:
                 with urllib.request.urlopen(url, timeout=4) as r:
                     body = r.read().decode("utf-8", errors="replace")[:300]
-                    self.controller.log(f"SL test OK: {body}")
+                    self.controller.log(f"SL test lokalny OK: {body}")
             except urllib.error.HTTPError as e:
                 self.controller.log(f"SL test HTTP {e.code}: {e.read()[:200]!r}")
             except Exception as e:
                 self.controller.log(f"SL test błąd: {e}")
+
+        self._bg(work)
+
+    def _diagnose_sl_connection(self) -> None:
+        """Lokalnie + publiczny tunel z User-Agent jak z Second Life."""
+        import urllib.error
+        import urllib.request
+        from urllib.parse import quote
+
+        from max2_controller.internet_share import probe_sl_http
+        from max2_controller.remote_links import is_public_https_url
+
+        if not (self._remote_handle and self._remote_handle.running):
+            if not self.remote_sw.get_active():
+                self.remote_sw.set_active(True)
+        port = int(self.config.remote_port)
+        token = self.config.remote_token
+        pub = self._sl_base_url()
+
+        def work():
+            self.controller.log("=== Diagnostyka połączenia (HUD / przeglądarka) ===")
+            for label, url in (
+                ("local /health", f"http://127.0.0.1:{port}/health"),
+                ("local /sl/ping", f"http://127.0.0.1:{port}/sl/ping"),
+                (
+                    "local /sl/status",
+                    f"http://127.0.0.1:{port}/sl/status?token={quote(token, safe='')}",
+                ),
+            ):
+                try:
+                    with urllib.request.urlopen(url, timeout=4) as r:
+                        body = r.read().decode("utf-8", errors="replace")[:160]
+                        self.controller.log(f"  {label}: HTTP {r.status} {body}")
+                except urllib.error.HTTPError as e:
+                    self.controller.log(f"  {label}: HTTP {e.code}")
+                except Exception as e:
+                    self.controller.log(f"  {label}: BŁĄD {e}")
+            if is_public_https_url(pub):
+                result = probe_sl_http(pub, token)
+                self.controller.log(
+                    f"  tunel {pub}: reachable={result.get('reachable')} "
+                    f"sl_ok={result.get('ok')} blocked={result.get('sl_blocked')} "
+                    f"— {result.get('message')}"
+                )
+                if result.get("sl_blocked"):
+                    self._ui(
+                        lambda: self._alert(
+                            "Cloudflare blokuje Second Life",
+                            result.get("message")
+                            or "Zmień tryb tunelu na ngrok / Tailscale Funnel / Named.",
+                        )
+                    )
+            else:
+                self.controller.log(
+                    f"  brak publicznego HTTPS (teraz: {pub or '—'}) — HUD z gridu się nie połączy"
+                )
 
         self._bg(work)
 
@@ -2430,7 +2555,9 @@ class Max2GtkApp(_AppBase):
         if not hasattr(self, "tunnel_mode_dd"):
             return (self.config.tunnel_mode or "quick").lower()
         idx = int(self.tunnel_mode_dd.get_selected())
-        return {0: "quick", 1: "named", 2: "token"}.get(idx, "quick")
+        return {0: "quick", 1: "named", 2: "token", 3: "ngrok", 4: "funnel", 5: "ssh"}.get(
+            idx, "quick"
+        )
 
     def _on_tunnel_mode_dd(self, *_a) -> None:
         self.config.tunnel_mode = self._tunnel_mode_str()
@@ -2489,6 +2616,30 @@ class Max2GtkApp(_AppBase):
         self.controller.log(f"Link internetowy dla partnerki ({stable}):\n  {panel}")
         self._clipboard_set(panel)
         self.controller.log("✓ Link skopiowany do schowka")
+        # po starcie tunelu sprawdź, czy LSL z gridu nie dostanie Cloudflare 403
+        token = self.config.remote_token
+
+        def probe():
+            from max2_controller.internet_share import probe_sl_http
+
+            result = probe_sl_http(base, token)
+            if result.get("sl_blocked"):
+                self.controller.log(f"⚠ Second Life: {result.get('message')}")
+                self._ui(
+                    lambda: self.sl_info.set_text(
+                        "Tunel działa w przeglądarce, ale Cloudflare blokuje HUD SL.\n"
+                        "Zmień tryb na ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) "
+                        "i kliknij Udostępnij ponownie."
+                    )
+                    if hasattr(self, "sl_info")
+                    else None
+                )
+            elif result.get("ok"):
+                self.controller.log("✓ Tunel odpowiada także z User-Agent Second Life")
+            elif result.get("message"):
+                self.controller.log(f"Tunel probe: {result.get('message')}")
+
+        self._bg(probe)
 
     def _start_internet_share(self) -> None:
         """Panel ON + cloudflared (quick/named/token) + link w schowku."""
@@ -2543,8 +2694,9 @@ class Max2GtkApp(_AppBase):
                 self._ui(lambda: self._set_internet_busy(False))
                 return
             # named/token: URL od razu; quick: czekaj na trycloudflare
-            url = tun.wait_for_url(timeout=45.0 if mode == "quick" else 8.0)
-            if not url and mode == "quick":
+            wait_s = 45.0 if mode in ("quick", "ngrok", "ssh") else 8.0
+            url = tun.wait_for_url(timeout=wait_s)
+            if not url and mode in ("quick", "ngrok", "ssh"):
                 self._ui(
                     lambda: self._on_tunnel_error(
                         "Timeout — brak publicznego URL. Sprawdź internet i Log."
@@ -2574,9 +2726,17 @@ class Max2GtkApp(_AppBase):
             # nie czyść ręcznie wpisanego tunnelu usera jeśli nie nasz — tylko gdy pusty lub trycloudflare
             try:
                 cur = (self.sl_tunnel_entry.get_text() or "").strip()
-                if "trycloudflare.com" in cur or "ngrok" in cur:
+                if "trycloudflare.com" in cur or "ngrok" in cur or "lhr.life" in cur:
                     self.sl_tunnel_entry.set_text("")
                     self._update_sl_ui()
+            except Exception:
+                pass
+        # quick URL umiera po restarcie — nie pokazuj go jako żywego
+        pub = (self.config.tunnel_public_url or "")
+        if "trycloudflare.com" in pub or "lhr.life" in pub:
+            self.config.tunnel_public_url = ""
+            try:
+                self.config.save()
             except Exception:
                 pass
         if not silent:

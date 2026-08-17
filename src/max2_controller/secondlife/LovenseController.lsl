@@ -58,15 +58,43 @@ integer TokenMissing()
     return (TOKEN == "" || TOKEN == "WKLEJ_TOKEN_Z_GUI");
 }
 
+string HostOf(string u)
+{
+    u = llToLower(llStringTrim(u, STRING_TRIM));
+    integer p = llSubStringIndex(u, "://");
+    if (p >= 0) u = llGetSubString(u, p + 3, -1);
+    p = llSubStringIndex(u, "/");
+    if (p >= 0) u = llGetSubString(u, 0, p - 1);
+    p = llSubStringIndex(u, ":");
+    if (p >= 0) u = llGetSubString(u, 0, p - 1);
+    return u;
+}
+
+integer IsPrivateHost(string host)
+{
+    if (host == "" || host == "localhost") return TRUE;
+    if (llGetSubString(host, 0, 3) == "127.") return TRUE;
+    if (llGetSubString(host, 0, 7) == "192.168.") return TRUE;
+    if (llGetSubString(host, 0, 2) == "10.") return TRUE;
+    if (llGetSubString(host, 0, 3) == "172.")
+    {
+        string rest = llGetSubString(host, 4, -1);
+        integer dot = llSubStringIndex(rest, ".");
+        if (dot > 0)
+        {
+            integer n = (integer)llGetSubString(rest, 0, dot - 1);
+            if (n >= 16 && n <= 31) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 integer BaseUrlNeedsSetup()
 {
-    string u = llToLower(TrimSlash(BASE_URL));
+    string u = TrimSlash(BASE_URL);
     if (u == "") return TRUE;
-    if (llSubStringIndex(u, "127.0.0.1") >= 0) return TRUE;
-    if (llSubStringIndex(u, "localhost") >= 0) return TRUE;
-    if (llSubStringIndex(u, "192.168.1.10") >= 0) return TRUE;
-    if (llSubStringIndex(u, "xxxx.") >= 0) return TRUE;
-    return FALSE;
+    if (llSubStringIndex(llToLower(u), "xxxx.") >= 0) return TRUE;
+    return IsPrivateHost(HostOf(u));
 }
 
 // face 0 texture by status
@@ -261,7 +289,13 @@ DoGet(string path, string query)
     gBusy = TRUE;
     Look();
     gReq = llHTTPRequest(UrlJoin(path, q),
-        [HTTP_METHOD, "GET", HTTP_VERBOSE_THROTTLE, FALSE, HTTP_BODY_MAXLENGTH, 2048], "");
+        [HTTP_METHOD, "GET",
+         HTTP_VERBOSE_THROTTLE, FALSE,
+         HTTP_BODY_MAXLENGTH, 4096,
+         HTTP_PRAGMA, "no-cache",
+         HTTP_USER_AGENT, "LovenseHUD/1.4",
+         HTTP_CUSTOM_HEADER, "Accept", "application/json",
+         HTTP_EXTENDED_ERROR, TRUE], "");
 }
 
 CmdV(integer level, float t)
@@ -648,16 +682,36 @@ default
         else if (status == 403)
         {
             gConnected = FALSE;
-            gLastMsg = "remote off";
+            string low = llToLower(body);
+            if (llSubStringIndex(low, "cloudflare") >= 0
+                || llSubStringIndex(low, "just a moment") >= 0
+                || llSubStringIndex(low, "cf-ray") >= 0
+                || llSubStringIndex(low, "challenge") >= 0)
+            {
+                gLastMsg = "cloudflare block";
+                Look();
+                llOwnerSay("403 Cloudflare blocks SL HUD. On PC use ngrok / Tailscale Funnel / Named tunnel (disable Bot Fight). Quick trycloudflare often fails from the grid.");
+            }
+            else
+            {
+                gLastMsg = "remote off";
+                Look();
+                llOwnerSay("403 enable remote panel on PC");
+            }
+        }
+        else if (status == 0 || status == 499)
+        {
+            gConnected = FALSE;
+            gLastMsg = "HTTP " + (string)status;
             Look();
-            llOwnerSay("403 enable remote panel on PC");
+            llOwnerSay("HTTP " + (string)status + " — grid cannot reach BASE_URL. Need public HTTPS (not 192.168 / localhost). Start tunnel on PC, then Setup → URL.");
         }
         else
         {
             gConnected = FALSE;
             gLastMsg = "HTTP " + (string)status;
             Look();
-            llOwnerSay("HTTP " + (string)status + " — tunnel/BASE_URL?");
+            llOwnerSay("HTTP " + (string)status + " — tunnel/BASE_URL? " + llGetSubString(body, 0, 80));
         }
     }
 }

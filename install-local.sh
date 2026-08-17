@@ -19,6 +19,7 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
+python3 -c "import flask,werkzeug,bleak; print('OK flask', flask.__name__, 'werkzeug', werkzeug.__name__)"
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" \
   "$HOME/.local/share/icons" "$HOME/.icons"
@@ -138,6 +139,17 @@ fi
 echo
 echo "Jeśli w menu nadal domyślna ikona: wyloguj/zaloguj albo:"
 echo "  gtk-update-icon-cache -f -t ~/.icons/hicolor"
+echo
+# fish: upewnij się, że ~/.local/bin jest na PATH
+if [[ -n "${FISH_VERSION:-}" ]] || [[ "${SHELL:-}" == *fish ]]; then
+  if ! echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
+    echo "Dodaj do PATH (fish):  fish_add_path ~/.local/bin"
+  fi
+fi
+echo
+echo "Second Life HUD: grid nie widzi 192.168 — w programie włącz panel web"
+echo "i „Udostępnij przez internet” (ngrok / Tailscale Funnel; Quick Cloudflare"
+echo "często blokuje LSL). Potem „Kopiuj skrypt LSL”."
 echo
 echo "Dla partnerki na innym PC — lepiej Flatpak:"
 echo "  ./build-flatpak.sh"

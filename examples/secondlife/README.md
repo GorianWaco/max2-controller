@@ -3,7 +3,8 @@
 Skrypt jest zrobiony jako **HUD na ekranie** (kafelek w rogu).  
 Łączy się z aplikacją na PC przez te same endpointy `/sl/*` co panel web.
 
-> Grid SL **nie widzi** `127.0.0.1` / zwykle `192.168.x` — potrzebny **tunnel HTTPS**.
+> Grid SL **nie widzi** `127.0.0.1` / `192.168.x` — potrzebny **tunel HTTPS**.
+> Quick Cloudflare często blokuje LSL (Bot Fight). Do HUD: **ngrok / Tailscale Funnel / Named**.
 
 ## Zbuduj HUD (2 minuty)
 

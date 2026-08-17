@@ -116,7 +116,7 @@ def register_secondlife_routes(
     config: "AppConfig",
     *,
     token_attr: str = "remote_token",
-    require_remote_on: bool = True,
+    require_remote_on: bool = False,
 ) -> None:
     """Podłącz /sl/* do istniejącej aplikacji Flask (zwykle remote)."""
 
@@ -144,7 +144,7 @@ def register_secondlife_routes(
                 {
                     "ok": False,
                     "error": "remote disabled",
-                    "hint": "Włącz panel zdalny w Lovense Controller (GUI)",
+                    "hint": "Włącz panel web w Lovense Controller (przełącznik Zdalne).",
                 }
             ),
             403,
@@ -158,6 +158,11 @@ def register_secondlife_routes(
     @app.route("/sl/help", methods=["GET", "POST"])
     def sl_help():
         return Response(HELP_TEXT, mimetype="text/plain; charset=utf-8")
+
+    @app.route("/sl/ping", methods=["GET", "POST", "HEAD"])
+    def sl_ping():
+        """Bez tokenu — HUD odróżnia „tunel żyje” od „zły token”."""
+        return Response("OK lovense-sl\n", mimetype="text/plain; charset=utf-8")
 
     @app.route("/sl/status", methods=["GET", "POST"])
     def sl_status():

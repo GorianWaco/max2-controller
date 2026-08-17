@@ -248,13 +248,18 @@ ngrok http 8787
 
 ## Second Life (skrypt LSL)
 
-Grid SL **nie widzi** `127.0.0.1` — skrypt woła ten sam serwer co panel zdalny (`/sl/*`).
+Grid SL **nie widzi** `127.0.0.1` ani `192.168.x` — skrypt woła publiczny HTTPS (`/sl/*`).
 
-1. Włącz **panel web** w GUI.
-2. Sekcja **Second Life** → skopiuj **BASE_URL**, **TOKEN** albo od razu **„Kopiuj skrypt LSL”**
-   (zapisuje też `~/.config/max2-controller/LovenseController.lsl`).
-3. Wklej skrypt do HUD / collary wworld.
-4. Przez internet: `cloudflared tunnel --url http://127.0.0.1:8787` → w polu „Publiczny URL” wklej `https://….trycloudflare.com` → znowu skopiuj skrypt.
+**Ważne:** Quick Cloudflare (`*.trycloudflare.com`) często **blokuje LSL** (Bot Fight / challenge).
+Przeglądarka wtedy działa, HUD w SL dostaje 403. Do HUD użyj **ngrok**, **Tailscale Funnel**
+albo **Named tunnel** z wyłączonym Bot Fight.
+
+1. Włącz **panel web** w GUI (albo zostaw auto-start panelu + tunelu).
+2. **Udostępnij przez internet** — tryb ngrok / Funnel (nie samo LAN).
+3. Sekcja **Second Life** → **„Kopiuj skrypt LSL”** (wypełnia BASE_URL + TOKEN).
+   Zapisuje też `~/.config/max2-controller/LovenseController.lsl`.
+4. Wklej skrypt do HUD / collary wworld. Przycisk **Diagnostyka SL** sprawdza tunel
+   z User-Agent jak z gridu.
 
 ### Endpointy (GET lub POST)
 
@@ -316,6 +321,10 @@ max2-controller/
 | Puste GetToys | Zabawka sparowana w Lovense, nie w innej apce BLE jednocześnie |
 | Hotkeys nie działają | Wayland/X11 permissions; wyłącz w configu |
 | Remote nie działa z internetu | Firewall + tunnel; w LAN sprawdź IP i port 8787 |
+| HUD SL offline / HTTP 0 / 499 | BASE_URL jest `192.168` albo `127.0.0.1` — grid tego nie widzi. Włącz tunel HTTPS i skopiuj skrypt ponownie |
+| HUD SL HTTP 403, przeglądarka OK | Cloudflare Bot Fight. Zmień tunel na ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) |
+| Panel w przeglądarce „nie łączy” | Panel web musi być WŁ; stary link `trycloudflare` umiera po restarcie — nowy „Udostępnij” |
+| Po reinstalacji Linuksa nic nie słucha | Auto-start panelu+tunelu, albo włącz przełącznik Zdalne. Test: `http://127.0.0.1:8787/health` |
 
 ## Licencja / odpowiedzialność
 

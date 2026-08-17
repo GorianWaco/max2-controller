@@ -30,6 +30,15 @@ _CF_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com")
 _HTTPS_URL_RE = re.compile(r"https://[a-zA-Z0-9][a-zA-Z0-9._-]+(?::\d+)?(?:/[^\s\"']*)?")
 # ngrok
 _NGROK_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.ngrok(?:-free)?\.(?:app|io|dev)")
+# localhost.run / lhr.life
+_LHR_URL_RE = re.compile(r"https://[a-zA-Z0-9.-]+\.(?:lhr\.life|localhost\.run)")
+# tailscale funnel / ts.net
+_TS_URL_RE = re.compile(r"https://[a-zA-Z0-9._-]+\.ts\.net(?::\d+)?")
+
+# UA jak z llHTTPRequest — Cloudflare Bot Fight często to blokuje
+SL_USER_AGENT = (
+    "Second-Life-LSL/2024-03-18.8333615376 (https://secondlife.com) LovenseHUD/1.4"
+)
 
 _CLOUDFLARED_DIR = Path.home() / ".cloudflared"
 _APP_CF_CONFIG = Path.home() / ".config" / "max2-controller" / "cloudflared.yml"
@@ -425,9 +434,12 @@ class InternetTunnel:
     ) -> bool:
         """
         mode:
-          quick  — trycloudflare (URL losowy)
+          quick  — trycloudflare (URL losowy; przeglądarka OK, SL często blokowany)
           named  — stały hostname (wymaga domeny CF + login)
           token  — cloudflared tunnel run --token … (Zero Trust)
+          ngrok  — ngrok http PORT (lepszy do Second Life)
+          funnel — Tailscale Funnel
+          ssh    — localhost.run (SSH reverse; fallback pod SL)
         """
         self.stop()
         self.error = None
@@ -453,7 +465,53 @@ class InternetTunnel:
         kind = ""
         preset_url = ""
 
-        if mode == "token":
+        if mode == "funnel":
+            self._progress("Startuję Tailscale Funnel…")
+            ok, pub_or_err = start_tailscale_funnel(local_port)
+            if not ok:
+                self._emit_error(pub_or_err)
+                return False
+            self.kind = "tailscale-funnel"
+            with self._lock:
+                self.public_base = pub_or_err
+            self._progress(f"Publiczny URL (Funnel): {pub_or_err}")
+            if self.on_url:
+                try:
+                    self.on_url(pub_or_err, self.kind)
+                except Exception:
+                    logger.exception("on_url")
+            return True
+
+        if mode == "ssh":
+            if not shutil.which("ssh"):
+                self._emit_error("Brak ssh — potrzebny do localhost.run")
+                return False
+            cmd = [
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "ServerAliveInterval=30",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-T",
+                "-R",
+                f"80:127.0.0.1:{int(local_port)}",
+                "nokey@localhost.run",
+            ]
+            kind = "localhost.run"
+
+        elif mode == "ngrok":
+            if not ng:
+                self._emit_error(
+                    "Brak ngrok. Zainstaluj: https://ngrok.com/download "
+                    "albo: yay -S ngrok"
+                )
+                return False
+            cmd = [ng, "http", str(int(local_port)), "--log=stdout", "--log-format=logfmt"]
+            kind = "ngrok"
+
+        elif mode == "token":
             if not cf:
                 self._emit_error(self.install_hint())
                 return False
@@ -573,7 +631,12 @@ class InternetTunnel:
                     elif mode == "quick":
                         pass
                 else:
-                    m = _NGROK_URL_RE.search(line) or _CF_URL_RE.search(line)
+                    m = (
+                        _NGROK_URL_RE.search(line)
+                        or _LHR_URL_RE.search(line)
+                        or _TS_URL_RE.search(line)
+                        or _CF_URL_RE.search(line)
+                    )
                     if m:
                         url = m.group(0)
 
@@ -682,6 +745,153 @@ def tailscale_status_summary() -> str:
         return f"Tailscale: {msg}"
     except Exception as e:
         return f"Tailscale: {e}"
+
+
+def probe_sl_http(base_url: str, token: str = "", timeout: float = 10.0) -> dict:
+    """Sprawdź publiczny URL tak, jak zrobi to grid SL (User-Agent LSL).
+
+    Zwraca dict: ok, reachable, sl_blocked, status, message.
+    sl_blocked=True → Cloudflare (lub inny WAF) rzuca challenge; przeglądarka
+    może działać, HUD w Second Life nie.
+    """
+    from urllib.error import HTTPError, URLError
+    from urllib.parse import quote
+
+    base = (base_url or "").strip().rstrip("/")
+    out: dict = {
+        "ok": False,
+        "reachable": False,
+        "sl_blocked": False,
+        "status": 0,
+        "message": "",
+        "body": "",
+    }
+    if not base:
+        out["message"] = "brak publicznego URL"
+        return out
+    if not base.startswith("http"):
+        base = "https://" + base
+
+    def _read(url: str, ua: str) -> tuple[int, str]:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": ua,
+                "Accept": "application/json, text/plain, */*",
+                "Cache-Control": "no-cache",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8", errors="replace")[:800]
+                return int(getattr(resp, "status", 200) or 200), body
+        except HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")[:800]
+            except Exception:
+                pass
+            return int(e.code or 0), body
+        except URLError as e:
+            raise RuntimeError(str(e.reason or e)) from e
+
+    try:
+        code, body = _read(f"{base}/health", "LovenseController/1.4 probe")
+        out["status"] = code
+        out["body"] = body
+        if code >= 200 and code < 300:
+            out["reachable"] = True
+        else:
+            out["message"] = f"/health HTTP {code}"
+    except Exception as e:
+        out["message"] = f"tunel nie odpowiada: {e}"
+        return out
+
+    sl_path = f"{base}/sl/ping"
+    if token:
+        sl_path = f"{base}/sl/status?token={quote(token, safe='')}"
+    try:
+        code, body = _read(sl_path, SL_USER_AGENT)
+        out["status"] = code
+        out["body"] = body
+        low = (body or "").lower()
+        cf = (
+            "just a moment" in low
+            or "cf-ray" in low
+            or "cloudflare" in low
+            or "attention required" in low
+            or "managed_challenge" in low
+            or (code in (403, 503) and "challenge" in low)
+        )
+        if cf or (code == 403 and "remote disabled" not in low and "unauthorized" not in low):
+            # 403 HTML od CF vs 403 JSON od naszej apki
+            if "remote disabled" in low or '"error"' in low:
+                out["ok"] = True
+                out["reachable"] = True
+                out["message"] = "serwer OK, panel remote wyłączony w GUI"
+                return out
+            if cf or "<html" in low or "just a moment" in low:
+                out["sl_blocked"] = True
+                out["message"] = (
+                    "Cloudflare Bot Fight blokuje Second Life (LSL). "
+                    "Przeglądarka może działać, HUD nie. "
+                    "Użyj: ngrok, Tailscale Funnel albo Named tunnel "
+                    "(wyłącz Bot Fight na domenie)."
+                )
+                return out
+        if code in (401,):
+            out["ok"] = True
+            out["reachable"] = True
+            out["message"] = "tunel OK, zły token"
+            return out
+        if 200 <= code < 300:
+            out["ok"] = True
+            out["reachable"] = True
+            out["message"] = "tunel OK dla Second Life"
+            return out
+        out["message"] = f"SL probe HTTP {code}"
+        return out
+    except Exception as e:
+        out["message"] = f"SL probe błąd: {e}"
+        return out
+
+
+def start_tailscale_funnel(local_port: int) -> tuple[bool, str]:
+    """Włącz Tailscale Funnel na porcie panelu. Zwraca (ok, url_or_error)."""
+    path = shutil.which("tailscale")
+    if not path:
+        return False, "Brak tailscale — sudo pacman -S tailscale && sudo tailscale up"
+    try:
+        subprocess.check_output(
+            [path, "funnel", "--bg", str(int(local_port))],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=25,
+        )
+    except subprocess.CalledProcessError as e:
+        out = (e.output or str(e)).strip()
+        # już włączony bywa exit != 0
+        if "already" not in out.lower() and "on" not in out.lower():
+            return False, f"tailscale funnel: {out[-400:]}"
+    except Exception as e:
+        return False, f"tailscale funnel: {e}"
+    try:
+        st = subprocess.check_output(
+            [path, "funnel", "status"],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=12,
+        )
+    except Exception as e:
+        return False, f"funnel status: {e}"
+    m = _TS_URL_RE.search(st or "")
+    if m:
+        return True, m.group(0).rstrip("/")
+    m = _HTTPS_URL_RE.search(st or "")
+    if m:
+        return True, m.group(0).rstrip("/")
+    return False, f"Nie odczytano URL Funnel:\n{(st or '')[:300]}"
 
 
 def build_public_panel_link(public_base: str, token: str) -> str:

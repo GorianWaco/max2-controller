@@ -33,6 +33,11 @@
     <content_attribute id="sex-themes">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="1.4.0" date="2026-08-17">
+      <description>
+        <p>Fix Second Life HUD and browser remote after fresh Linux: public HTTPS URL for LSL, Cloudflare Bot Fight detection, ProxyFix, auto-start web panel + tunnel, ngrok / Tailscale Funnel / localhost.run modes.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-07-27">
       <description>
         <p>Multi-toy support, GStreamer app-audio capture, GTK UI, Flatpak packaging.</p>
