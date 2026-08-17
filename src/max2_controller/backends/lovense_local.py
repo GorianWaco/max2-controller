@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 import urllib3
@@ -15,6 +18,65 @@ logger = logging.getLogger(__name__)
 
 # Self-signed cert na *.lovense.club
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_LOVENSE_HOST_RE = re.compile(
+    r"^(?P<ip>[\d-]+)\.lovense\.club(?::(?P<port>\d+))?$",
+    re.I,
+)
+
+
+def has_ble_adapter() -> bool:
+    """Czy w systemie widać adapter Bluetooth (sysfs)."""
+    root = Path("/sys/class/bluetooth")
+    try:
+        if not root.is_dir():
+            return False
+        return any(root.iterdir())
+    except Exception:
+        return False
+
+
+def build_phone_api_url(ip: str, port: int | str = 30010) -> str:
+    """IP telefonu + port z Game Mode → URL Standard API."""
+    host = (ip or "").strip()
+    host = host.replace("https://", "").replace("http://", "")
+    host = host.split("/")[0].split(":")[0]
+    host = host.replace(".", "-")
+    try:
+        p = int(port)
+    except (TypeError, ValueError):
+        p = 30010
+    if p <= 0:
+        p = 30010
+    if host in {"127-0-0-1", "localhost"}:
+        return f"http://127.0.0.1:{p}/command"
+    return f"https://{host}.lovense.club:{p}/command"
+
+
+def parse_phone_api_url(url: str) -> tuple[str, int]:
+    """Z URL-a API wyciągnij IP (z kropkami) i port."""
+    raw = (url or "").strip()
+    if not raw:
+        return "", 30010
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return "", 30010
+    host = parsed.hostname or ""
+    port = parsed.port or 0
+    m = _LOVENSE_HOST_RE.match(parsed.netloc or "")
+    if m:
+        ip = m.group("ip").replace("-", ".")
+        if m.group("port"):
+            port = int(m.group("port"))
+        elif not port:
+            port = 30010
+        return ip, port
+    if host:
+        return host, int(port or (80 if parsed.scheme == "http" else 443))
+    return "", 30010
 
 
 class LovenseLocalBackend:

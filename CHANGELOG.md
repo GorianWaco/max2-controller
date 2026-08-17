@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.0 — 2026-08-17
+
+Tryb bez Bluetooth: Lovense Remote na telefonie (Game Mode).
+Wpisujesz IP i port, program składa URL i testuje połączenie.
+Brak adaptera BLE → ten tryb włączany sam.
+
 ## 1.5.1 — 2026-08-17
 
 Po starcie tunelu program czeka aż `https://…trycloudflare.com/health` naprawdę odpowiada

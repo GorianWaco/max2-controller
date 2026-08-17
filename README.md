@@ -46,15 +46,18 @@ Program łączy się z Max 2 **bezpośrednio przez Bluetooth** komputera (biblio
 
 Wymagania Linux: działający adapter BLE (`hci0`), użytkownik w grupie uprawnień do BT (zwykle działa „out of the box” na CachyOS/Arch).
 
-### Alternatywa: Lovense Connect / Remote (telefon)
+### Gdy PC nie ma Bluetooth: Lovense Remote na telefonie
 
-Opcjonalnie w GUI wybierz **Lovense Connect/Remote** i podaj URL:
+Zabawkę trzyma **oficjalna apka na Androidzie**. Program na PC steruje nią po Wi‑Fi (Game Mode).
 
-| Źródło | URL |
-|--------|-----|
-| Lovense Connect | `http://127.0.0.1:20010/command` |
-| Remote na PC | `https://127-0-0-1.lovense.club:30010/command` |
-| Remote na telefonie (LAN) | `https://192-168-x-x.lovense.club:PORT/command` |
+1. Telefon i PC w tej samej sieci Wi‑Fi.
+2. Lovense Remote → zabawka połączona → **Game Mode** (IP + port na ekranie).
+3. W programie: **Jak łączyć → Telefon (Lovense Remote)** → wpisz IP i port → **Połącz z telefonem**.
+4. **Test połączenia** powinien pokazać zabawkę.
+
+Gdy w PC nie ma adaptera BLE, ten tryb wybiera się sam.
+
+Ręczny URL (gdy trzeba): `https://192-168-0-15.lovense.club:30010/command` (kropki w IP → myślniki).
 
 ## Instalacja
 

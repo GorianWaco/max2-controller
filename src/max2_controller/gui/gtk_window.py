@@ -229,15 +229,19 @@ class Max2GtkApp(_AppBase):
 
     def _build(self, pages: dict[str, Gtk.Box]) -> None:
         # Backend
-        sec = self._section(pages["polaczenie"], "Bluetooth (bez telefonu)")
+        sec = self._section(pages["polaczenie"], "Jak łączyć zabawkę")
         self.backend_dd = Gtk.DropDown.new_from_strings(
-            ["Bluetooth BLE (PC)", "Lovense Connect/Remote"]
+            [
+                "Bluetooth w tym PC",
+                "Telefon (Lovense Remote) — gdy PC nie ma Bluetooth",
+            ]
         )
         if self.config.backend != "ble":
             self.backend_dd.set_selected(1)
         self.backend_dd.connect("notify::selected", self._on_backend)
         sec.append(self.backend_dd)
 
+        self._ble_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         for label, cb in (
             ("Skanuj BLE", self._ble_scan),
@@ -248,7 +252,7 @@ class Max2GtkApp(_AppBase):
             b = Gtk.Button(label=label)
             b.connect("clicked", lambda _b, c=cb: c())
             row.append(b)
-        sec.append(row)
+        self._ble_box.append(row)
 
         all_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         all_row.append(
@@ -258,26 +262,72 @@ class Max2GtkApp(_AppBase):
         self.control_all_sw.set_active(True)
         self.control_all_sw.connect("notify::active", self._on_control_all)
         all_row.append(self.control_all_sw)
-        sec.append(all_row)
+        self._ble_box.append(all_row)
 
         hint = Gtk.Label(
-            label="Dwie zabawki naraz: Skanuj → wybierz 1. → Połącz (dodaj) → wybierz 2. → Połącz. "
-            "„Steruj wszystkimi” = te same poziomy na obie. Zamknij Lovense na telefonach.",
+            label="Zamknij Lovense Remote na telefonie — zabawka trzyma tylko jedno BLE.",
             wrap=True,
             xalign=0,
         )
         hint.add_css_class("dim-label")
-        sec.append(hint)
+        self._ble_box.append(hint)
+        sec.append(self._ble_box)
+
+        self._phone_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        phone_hint = Gtk.Label(
+            label=(
+                "Zabawkę trzyma telefon. PC i telefon w tej samej Wi‑Fi.\n"
+                "Lovense Remote → Game Mode — przepisujesz IP i port z ekranu."
+            ),
+            wrap=True,
+            xalign=0,
+        )
+        phone_hint.add_css_class("dim-label")
+        self._phone_box.append(phone_hint)
+
+        from max2_controller.backends.lovense_local import parse_phone_api_url
+
+        saved_ip, saved_port = parse_phone_api_url(self.config.lovense_url)
+
+        ip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        ip_row.append(Gtk.Label(label="IP telefonu:", xalign=0))
+        self.phone_ip_entry = Gtk.Entry()
+        self.phone_ip_entry.set_placeholder_text("192.168.0.15")
+        self.phone_ip_entry.set_text(saved_ip)
+        self.phone_ip_entry.set_hexpand(True)
+        ip_row.append(self.phone_ip_entry)
+        self._phone_box.append(ip_row)
+
+        port_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        port_row.append(Gtk.Label(label="Port (Game Mode):", xalign=0))
+        self.phone_port_entry = Gtk.Entry()
+        self.phone_port_entry.set_placeholder_text("30010")
+        self.phone_port_entry.set_text(str(saved_port or 30010))
+        self.phone_port_entry.set_width_chars(8)
+        port_row.append(self.phone_port_entry)
+        self._phone_box.append(port_row)
 
         self.url_entry = Gtk.Entry()
         self.url_entry.set_text(self.config.lovense_url)
-        self.url_entry.set_placeholder_text("URL tylko dla trybu Connect/Remote")
-        url_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        url_row.append(self.url_entry)
-        save_url = Gtk.Button(label="Zapisz URL")
-        save_url.connect("clicked", lambda *_: self._save_url())
-        url_row.append(save_url)
-        sec.append(url_row)
+        self.url_entry.set_placeholder_text("https://192-168-0-15.lovense.club:30010/command")
+        self.url_entry.set_hexpand(True)
+        self._phone_box.append(self.url_entry)
+
+        phone_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        apply_phone = Gtk.Button(label="Połącz z telefonem")
+        apply_phone.add_css_class("suggested-action")
+        apply_phone.connect("clicked", lambda *_: self._apply_phone_backend())
+        phone_btns.append(apply_phone)
+        test_phone = Gtk.Button(label="Test połączenia")
+        test_phone.connect("clicked", lambda *_: self._test_phone_api())
+        phone_btns.append(test_phone)
+        self._phone_box.append(phone_btns)
+
+        self.phone_status_lbl = Gtk.Label(label="", wrap=True, xalign=0, selectable=True)
+        self._phone_box.append(self.phone_status_lbl)
+        sec.append(self._phone_box)
+
+        self._sync_backend_ui()
 
         # Zabawki — skan + lista połączonych (ListBox + przycisk Połącz przy każdym)
         sec = self._section(pages["polaczenie"], "Zabawki (Lush 3 · Nora · Max 2 · Gemini…)")
@@ -791,9 +841,22 @@ class Max2GtkApp(_AppBase):
                 child = nxt
 
     def _initial_load(self) -> bool:
-        # nie skanuj od razu na starcie (może „zamrażać” pierwsze sekundy) —
-        # user klika Skanuj BLE
-        self.scan_status_lbl.set_text("Kliknij „Skanuj BLE”, potem „Połącz” przy zabawce.")
+        from max2_controller.backends.lovense_local import has_ble_adapter
+
+        ble = has_ble_adapter()
+        if not ble and self.config.backend == "ble":
+            self.controller.log(
+                "Brak adaptera Bluetooth — ustawiam tryb telefonu (Lovense Remote)."
+            )
+            if self.backend_dd.get_selected() != 1:
+                self.backend_dd.set_selected(1)
+        self._sync_backend_ui()
+        if ble:
+            self.scan_status_lbl.set_text("Kliknij „Skanuj BLE”, potem „Połącz” przy zabawce.")
+        else:
+            self.scan_status_lbl.set_text(
+                "Brak Bluetooth w tym PC. Użyj Lovense Remote na telefonie (Game Mode)."
+            )
         self.controller.start_battery_poll()
         if self.config.game_api_enabled:
             # set_active wywoła _on_game_sw → start (jeśli jeszcze nie)
@@ -825,9 +888,93 @@ class Max2GtkApp(_AppBase):
         url = self.url_entry.get_text().strip()
         self._bg(lambda: self.controller.update_lovense_url(url))
 
+    def _phone_url_from_fields(self) -> str:
+        from max2_controller.backends.lovense_local import build_phone_api_url
+
+        ip = (self.phone_ip_entry.get_text() or "").strip()
+        port = (self.phone_port_entry.get_text() or "30010").strip()
+        if ip:
+            return build_phone_api_url(ip, port)
+        return (self.url_entry.get_text() or "").strip()
+
+    def _sync_backend_ui(self) -> None:
+        phone = False
+        try:
+            phone = int(self.backend_dd.get_selected()) == 1
+        except Exception:
+            phone = self.config.backend != "ble"
+        if hasattr(self, "_ble_box"):
+            self._ble_box.set_visible(not phone)
+        if hasattr(self, "_phone_box"):
+            self._phone_box.set_visible(phone)
+        if phone and hasattr(self, "scan_empty_lbl"):
+            self.scan_empty_lbl.set_text(
+                "Tryb telefonu: zabawki pojawią się po „Połącz z telefonem” / teście."
+            )
+
+    def _apply_phone_backend(self) -> None:
+        url = self._phone_url_from_fields()
+        if not url:
+            self.controller.log("Wpisz IP telefonu z Lovense Remote (Game Mode).")
+            return
+        if hasattr(self, "url_entry"):
+            self.url_entry.set_text(url)
+
+        def work():
+            self.controller.update_lovense_url(url)
+            self.controller.set_backend("lovense_local")
+            self._ui(self._sync_toy_menu)
+            self._ui(self._test_phone_api)
+
+        self._bg(work)
+
+    def _test_phone_api(self) -> None:
+        from max2_controller.backends.lovense_local import LovenseLocalBackend
+
+        url = self._phone_url_from_fields() or (self.url_entry.get_text() or "").strip()
+        if not url:
+            if hasattr(self, "phone_status_lbl"):
+                self.phone_status_lbl.set_text("Brak IP / URL.")
+            return
+        if hasattr(self, "phone_status_lbl"):
+            self.phone_status_lbl.set_text(f"Testuję {url} …")
+
+        def work():
+            be = LovenseLocalBackend(
+                url=url,
+                app_name=self.config.app_name,
+                verify_ssl=False,
+                timeout=4.0,
+            )
+            toys, result = be.get_toys()
+            if result.ok:
+                names = ", ".join(t.display_name for t in toys) or "brak zabawek w apce"
+                msg = f"OK — telefon odpowiada. {names}"
+            else:
+                msg = (
+                    f"Brak odpowiedzi: {result.message}\n"
+                    "Ten sam Wi‑Fi, Game Mode WŁ, Lovense Remote odblokowany."
+                )
+            self.controller.log(msg)
+            self._ui(
+                lambda: self.phone_status_lbl.set_text(msg)
+                if hasattr(self, "phone_status_lbl")
+                else None
+            )
+            if result.ok:
+                self._ui(self._sync_toy_menu)
+
+        self._bg(work)
+
     def _on_backend(self, *_args) -> None:
         idx = self.backend_dd.get_selected()
         name = "ble" if idx == 0 else "lovense_local"
+        self._sync_backend_ui()
+        if name == "lovense_local":
+            url = self._phone_url_from_fields()
+            if url:
+                self.url_entry.set_text(url)
+                self._bg(lambda: self.controller.update_lovense_url(url))
 
         def work():
             self.controller.set_backend(name)
