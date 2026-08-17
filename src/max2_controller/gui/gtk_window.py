@@ -2444,28 +2444,42 @@ class Max2GtkApp(_AppBase):
         mode = self._tunnel_mode_str()
         stable = "STAŁY" if mode in ("named", "token") else "tymczasowy"
         if hasattr(self, "internet_status_lbl"):
-            self.internet_status_lbl.set_text(
-                f"Internet: ONLINE ({kind}, {stable}) — link skopiowany"
-            )
+            self.internet_status_lbl.set_text("Czekam aż adres zacznie działać (DNS)…")
         if hasattr(self, "sl_tunnel_entry"):
             self.sl_tunnel_entry.set_text(base)
             self._update_sl_ui()
-        self.controller.log(f"Adres partnerki: {panel}")
-        self._clipboard_set(panel)
-        self._update_remote_link_ui()
-        # po starcie tunelu sprawdź, czy LSL z gridu nie dostanie Cloudflare 403
+        self.controller.log(f"Adres tunelu: {panel} — czekam aż DNS i /health będą żywe…")
+        if hasattr(self, "remote_status_lbl"):
+            self.remote_status_lbl.set_text("Czekam aż adres zacznie działać (DNS)…")
         token = self.config.remote_token
 
         def probe():
-            from max2_controller.internet_share import probe_sl_http
+            from max2_controller.internet_share import probe_sl_http, wait_public_http
 
+            ok, msg = wait_public_http(base, timeout=50.0)
+            if ok:
+                self.controller.log(f"Adres partnerki gotowy: {panel}")
+                self._ui(lambda: self._clipboard_set(panel))
+                self._ui(self._update_remote_link_ui)
+            else:
+                self.controller.log(
+                    f"Adres jeszcze nie odpowiada ({msg}). "
+                    "Odśwież za chwilę albo wyłącz i włącz udostępnianie."
+                )
+                self._ui(
+                    lambda: self.remote_status_lbl.set_text(
+                        "Adres jeszcze nieosiągalny — odśwież za 15 s"
+                    )
+                    if hasattr(self, "remote_status_lbl")
+                    else None
+                )
             result = probe_sl_http(base, token)
             if result.get("sl_blocked"):
                 self.controller.log(
                     "Cloudflare może blokować HUD SL — przeglądarka partnerki powinna działać."
                 )
             elif result.get("ok"):
-                self.controller.log("✓ Tunel odpowiada także z User-Agent Second Life")
+                self.controller.log("Tunel odpowiada także z User-Agent Second Life")
             elif result.get("message"):
                 self.controller.log(f"Tunel probe: {result.get('message')}")
 

@@ -747,6 +747,72 @@ def tailscale_status_summary() -> str:
         return f"Tailscale: {e}"
 
 
+def flush_local_dns() -> None:
+    """Zdejmij ujemny cache NXDOMAIN (systemd-resolved trzyma go nawet 30 min)."""
+    for cmd in (
+        ["resolvectl", "flush-caches"],
+        ["systemd-resolve", "--flush-caches"],
+    ):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.run(
+                cmd,
+                timeout=3,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        return
+
+
+def wait_public_http(base_url: str, timeout: float = 50.0) -> tuple[bool, str]:
+    """Czekaj aż nowy hostname tunelu się rozwiąże i /health odpowie.
+
+    cloudflared wypisuje URL zanim DNS trycloudflare jest widoczny.
+    systemd-resolved zapamiętuje NXDOMAIN i przeglądarka pokazuje
+    „witryna nieosiągalna” przez wiele minut.
+    """
+    from urllib.error import HTTPError, URLError
+
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return False, "brak URL"
+    if not base.startswith("http"):
+        base = "https://" + base
+    health = base + "/health"
+    flush_local_dns()
+    deadline = time.time() + timeout
+    last = "timeout"
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(
+                health,
+                headers={"User-Agent": "LovenseController/1.5", "Accept": "application/json"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                code = int(getattr(resp, "status", 200) or 200)
+                if 200 <= code < 500:
+                    return True, f"HTTP {code}"
+                last = f"HTTP {code}"
+        except HTTPError as e:
+            if int(e.code or 0) < 500:
+                return True, f"HTTP {e.code}"
+            last = f"HTTP {e.code}"
+        except URLError as e:
+            last = str(e.reason or e)
+            low = last.lower()
+            if any(s in low for s in ("name or service", "nodename", "resolve", "temporary failure")):
+                flush_local_dns()
+        except Exception as e:
+            last = str(e)
+        time.sleep(1.2)
+    return False, last
+
+
 def probe_sl_http(base_url: str, token: str = "", timeout: float = 10.0) -> dict:
     """Sprawdź publiczny URL tak, jak zrobi to grid SL (User-Agent LSL).
 

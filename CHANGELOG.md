@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.1 — 2026-08-17
+
+Po starcie tunelu program czeka aż `https://…trycloudflare.com/health` naprawdę odpowiada
+i czyści cache NXDOMAIN w systemd-resolved. Inaczej przeglądarka dostawała
+„witryna nieosiągalna” (DNS_PROBE_POSSIBLE) na jeszcze nieopublikowany hostname.
+
 ## 1.5.0 — 2026-08-17
 
 Zdalne sterowanie: jeden przełącznik, adres panelu partnerki, kopiowanie skryptu LSL i notatki z tokenem. Tunel startuje w tle.
