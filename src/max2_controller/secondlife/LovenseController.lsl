@@ -1,487 +1,741 @@
-// Lovense HUD — compact (avoid Stack-Heap Collision)
-// Touch=menu | /7 help | Setup=token/URL | textures switch with status
-// PC: panel ON + HTTPS tunnel. GUI can fill BASE_URL + TOKEN.
+// Lovense wearable — NO tunnel.
+// The PC app polls THIS object's SL URL (HTTP-in).
+// Wear on Head/Chest. Copy the PAIR URL into Lovense Controller.
 
-string  BASE_URL = "http://192.168.1.10:8787";
-string  TOKEN    = "WKLEJ_TOKEN_Z_GUI";
-integer CHAT_CHANNEL = 7;
-float   DEFAULT_TIME = 4.0;
+string  TOKEN    = "PASTE_TOKEN_FROM_GUI";
 string  NOTECARD_NAME = "lovense.cfg";
-integer HUD_ATTACH_POINT = 38;
-
-// Status textures (upload PNGs → paste UUIDs)
-key TEX_OFFLINE = "d935f61f-6a11-db27-dcaa-43d337291ac1";
-key TEX_ONLINE  = "d18a233f-3c4a-96e9-8f55-e7de49884bd6";
-key TEX_BUSY    = "94199f1e-0294-6655-eb9f-3c3e13014756";
-key TEX_ERROR   = "a5174b3f-4f59-057e-4efe-355e2579eece";
+integer ATTACH_POINT = 2;
+float   DEFAULT_TIME = 4.0;
+integer PUBLIC = TRUE;
+string  HOVER = ""; // owner hover text; empty = default title
 
 integer PROMPT_NONE = 0;
 integer PROMPT_TOKEN = 1;
-integer PROMPT_URL = 2;
+integer PROMPT_HOVER = 2;
 
-key gReq;
-key gNoteQuery;
-integer gListen;
+key     gUrlReq;
+string  gUrl;
+key     gNoteQuery;
+key     gUser;
+key     gAim;
+integer gLine;
+integer gNotePending;
 integer gMenuChan;
 integer gMenuListen;
-integer gLine;
-integer gConnected;
-string  gLastMsg;
-integer gBusy;
-integer gAttachTried;
-key gLastFaceTex;
 integer gPromptKind;
-integer gNotePending;
-integer gHttpCode; // last HTTP status for error face
+integer gAttachTried;
+integer gConnected;
+integer gVib;
+integer gVMax;
+integer gPump;
+integer gShowText;
+integer gPaired;
+float   gCoolAt;
+string  gPend; // action payload, consumed by PC GET
+integer gUses;
+integer gOrbit;
+string  gNeedsTxt;
+string  gTipTxt;
+string  gEnerTxt;
 
-string TrimSlash(string u)
+string JsonEsc(string s)
 {
-    integer n = llStringLength(u);
-    while (n > 0 && llGetSubString(u, n - 1, n - 1) == "/")
+    integer i;
+    string o = "";
+    integer n = llStringLength(s);
+    for (i = 0; i < n; ++i)
     {
-        u = llGetSubString(u, 0, n - 2);
-        n = llStringLength(u);
+        string c = llGetSubString(s, i, i);
+        if (c == "\\") o += "\\\\";
+        else if (c == "\"") o += "\\\"";
+        else o += c;
     }
-    return u;
+    return o;
 }
 
-string UrlJoin(string path, string query)
+string HoverUnescape(string s)
 {
-    string u = TrimSlash(BASE_URL);
-    if (llGetSubString(path, 0, 0) != "/") path = "/" + path;
-    if (query != "") return u + path + "?" + query;
-    return u + path;
-}
-
-integer TokenMissing()
-{
-    return (TOKEN == "" || TOKEN == "WKLEJ_TOKEN_Z_GUI");
-}
-
-string HostOf(string u)
-{
-    u = llToLower(llStringTrim(u, STRING_TRIM));
-    integer p = llSubStringIndex(u, "://");
-    if (p >= 0) u = llGetSubString(u, p + 3, -1);
-    p = llSubStringIndex(u, "/");
-    if (p >= 0) u = llGetSubString(u, 0, p - 1);
-    p = llSubStringIndex(u, ":");
-    if (p >= 0) u = llGetSubString(u, 0, p - 1);
-    return u;
-}
-
-integer IsPrivateHost(string host)
-{
-    if (host == "" || host == "localhost") return TRUE;
-    if (llGetSubString(host, 0, 3) == "127.") return TRUE;
-    if (llGetSubString(host, 0, 7) == "192.168.") return TRUE;
-    if (llGetSubString(host, 0, 2) == "10.") return TRUE;
-    if (llGetSubString(host, 0, 3) == "172.")
+    integer p = llSubStringIndex(s, "\\n");
+    while (p >= 0)
     {
-        string rest = llGetSubString(host, 4, -1);
-        integer dot = llSubStringIndex(rest, ".");
-        if (dot > 0)
-        {
-            integer n = (integer)llGetSubString(rest, 0, dot - 1);
-            if (n >= 16 && n <= 31) return TRUE;
-        }
-    }
-    return FALSE;
-}
-
-integer BaseUrlNeedsSetup()
-{
-    string u = TrimSlash(BASE_URL);
-    if (u == "") return TRUE;
-    if (llSubStringIndex(llToLower(u), "xxxx.") >= 0) return TRUE;
-    return IsPrivateHost(HostOf(u));
-}
-
-// face 0 texture by status
-Look()
-{
-    llSetText("", ZERO_VECTOR, 0.0);
-    key tex = TEX_OFFLINE;
-    float glow = 0.04;
-    if (gHttpCode == 401 || gHttpCode == 403 || (gHttpCode >= 400 && gHttpCode != 0))
-    {
-        tex = TEX_ERROR;
-        glow = 0.08;
-    }
-    else if (gBusy)
-    {
-        tex = TEX_BUSY;
-        glow = 0.14;
-    }
-    else if (gConnected)
-    {
-        tex = TEX_ONLINE;
-        glow = 0.10;
-    }
-    if (tex != gLastFaceTex)
-    {
-        gLastFaceTex = tex;
-        llSetLinkPrimitiveParamsFast(LINK_THIS, [
-            PRIM_TEXTURE, 0, tex, <1,1,0>, ZERO_VECTOR, 0.0,
-            PRIM_TEXTURE, 2, tex, <1,1,0>, ZERO_VECTOR, 0.0,
-            PRIM_COLOR, 0, <1,1,1>, 1.0,
-            PRIM_COLOR, 2, <0.9,0.9,0.95>, 1.0,
-            PRIM_FULLBRIGHT, 0, TRUE,
-            PRIM_FULLBRIGHT, 2, TRUE
-        ]);
-    }
-    llSetLinkPrimitiveParamsFast(LINK_THIS, [
-        PRIM_GLOW, 0, glow,
-        PRIM_GLOW, 2, glow * 0.3
-    ]);
-}
-
-SetupHud()
-{
-    llSetObjectName("Lovense HUD");
-    llSetObjectDesc("touch=menu /7 help");
-    llSetLinkPrimitiveParamsFast(LINK_THIS, [
-        PRIM_TYPE, PRIM_TYPE_BOX, PRIM_HOLE_DEFAULT,
-            <0,1,0>, 0.0, ZERO_VECTOR, <1,1,0>, ZERO_VECTOR,
-        PRIM_SIZE, <0.22, 0.12, 0.014>,
-        PRIM_PHYSICS, FALSE,
-        PRIM_PHANTOM, FALSE,
-        PRIM_COLOR, ALL_SIDES, <0.3,0.05,0.12>, 1.0,
-        PRIM_TEXTURE, ALL_SIDES, TEXTURE_BLANK, <1,1,0>, ZERO_VECTOR, 0.0,
-        PRIM_FULLBRIGHT, ALL_SIDES, FALSE,
-        PRIM_GLOW, ALL_SIDES, 0.0
-    ]);
-    llSetClickAction(CLICK_ACTION_TOUCH);
-    gLastFaceTex = NULL_KEY;
-    Look();
-}
-
-OpenListen()
-{
-    gMenuChan = 0x80000000 | (integer)llFrand(0x7FFFFFFF);
-    llListenRemove(gMenuListen);
-    gMenuListen = llListen(gMenuChan, "", llGetOwner(), "");
-}
-
-string ExtractToken(string s)
-{
-    integer i = llSubStringIndex(s, "/r/");
-    if (i >= 0)
-    {
-        string r = llGetSubString(s, i + 3, -1);
-        integer c = llSubStringIndex(r, "?");
-        if (c >= 0) r = llGetSubString(r, 0, c - 1);
-        c = llSubStringIndex(r, "/");
-        if (c >= 0) r = llGetSubString(r, 0, c - 1);
-        return llStringTrim(r, STRING_TRIM);
-    }
-    i = llSubStringIndex(llToLower(s), "token=");
-    if (i >= 0)
-    {
-        string r = llGetSubString(s, i + 6, -1);
-        integer a = llSubStringIndex(r, "&");
-        if (a >= 0) r = llGetSubString(r, 0, a - 1);
-        return llStringTrim(r, STRING_TRIM);
+        s = llGetSubString(s, 0, p - 1) + "\n" + llGetSubString(s, p + 2, -1);
+        p = llSubStringIndex(s, "\\n");
     }
     return s;
 }
 
-string ExtractBase(string s)
+integer LoadUses()
 {
-    s = llStringTrim(s, STRING_TRIM);
-    if (llSubStringIndex(s, "http://") != 0 && llSubStringIndex(s, "https://") != 0)
-        return TrimSlash(s);
-    integer r = llSubStringIndex(s, "/r/");
-    if (r >= 0) return TrimSlash(llGetSubString(s, 0, r - 1));
-    integer p = llSubStringIndex(s, "/sl");
-    if (p >= 0) return TrimSlash(llGetSubString(s, 0, p - 1));
-    p = llSubStringIndex(s, "/panel");
-    if (p >= 0) return TrimSlash(llGetSubString(s, 0, p - 1));
-    p = llSubStringIndex(s, "?");
-    if (p >= 0) s = llGetSubString(s, 0, p - 1);
-    return TrimSlash(s);
+    string d = llGetObjectDesc();
+    integer p = llSubStringIndex(llToLower(d), "uses=");
+    if (p < 0) return 0;
+    return (integer)llGetSubString(d, p + 5, -1);
 }
 
-PromptToken()
+SaveUses()
 {
-    OpenListen();
-    gPromptKind = PROMPT_TOKEN;
-    llTextBox(llGetOwner(),
-        "Lovense HUD — TOKEN\nPaste token OR full panel link (.../r/TOKEN).\nEmpty=cancel.",
-        gMenuChan);
+    llSetObjectDesc("touch=control uses=" + (string)gUses);
+    llLinksetDataWrite("lv.uses", (string)gUses);
 }
 
-PromptUrl()
+integer NeedsChan()
 {
-    OpenListen();
-    gPromptKind = PROMPT_URL;
-    string cur = TrimSlash(BASE_URL);
-    if (cur == "") cur = "(none)";
-    llTextBox(llGetOwner(),
-        "Lovense HUD — BASE URL\nPaste HTTPS tunnel or full .../r/TOKEN link.\nNow: " + cur,
-        gMenuChan);
+    return 0xC07E0000 ^ (integer)("0x" + llGetSubString((string)llGetOwner(), 0, 7));
 }
 
-integer MaybeSetup()
+PulseNeeds(string kind)
 {
-    if (TokenMissing()) { PromptToken(); return TRUE; }
-    if (BaseUrlNeedsSetup()) { PromptUrl(); return TRUE; }
+    integer vmax = gVMax;
+    if (vmax < 1) vmax = 20;
+    string msg = "LV|" + kind + "|" + (string)gVib + "|" + (string)vmax;
+    llMessageLinked(LINK_SET, 0xC07E, msg, NULL_KEY);
+    llRegionSay(NeedsChan(), msg);
+}
+
+integer TokenMissing()
+{
+    return (TOKEN == "" || TOKEN == "PASTE_TOKEN_FROM_GUI" || TOKEN == "WKLEJ_TOKEN_Z_GUI");
+}
+
+integer TokenLooksOk(string t)
+{
+    if (t == "" || t == "PASTE_TOKEN_FROM_GUI" || t == "WKLEJ_TOKEN_Z_GUI")
+        return FALSE;
+    return TRUE;
+}
+
+SaveCfg()
+{
+    llLinksetDataWrite("lv.ok", "1");
+    // Never overwrite a stored token with the placeholder.
+    if (!TokenMissing())
+    {
+        llLinksetDataWrite("lv.token", TOKEN);
+        llLinksetDataWrite("lv.tok", TOKEN);
+    }
+    llLinksetDataWrite("lv.public", (string)PUBLIC);
+    llLinksetDataWrite("lv.hover", HOVER);
+    llLinksetDataWrite("lv.time", (string)DEFAULT_TIME);
+    llLinksetDataWrite("lv.show", (string)gShowText);
+    llLinksetDataWrite("lv.uses", (string)gUses);
+    llLinksetDataWrite("lv.orbit", (string)gOrbit);
+}
+
+LoadCfg()
+{
+    string t = llLinksetDataRead("lv.token");
+    if (!TokenLooksOk(t)) t = llLinksetDataRead("lv.tok");
+    if (TokenLooksOk(t)) TOKEN = t;
+    if (llLinksetDataRead("lv.ok") != "1")
+    {
+        if (!TokenMissing()) SaveCfg();
+        return;
+    }
+    string p = llLinksetDataRead("lv.public");
+    if (p != "") PUBLIC = (integer)p;
+    HOVER = llLinksetDataRead("lv.hover");
+    string tm = llLinksetDataRead("lv.time");
+    if (tm != "") DEFAULT_TIME = (float)tm;
+    string sh = llLinksetDataRead("lv.show");
+    if (sh != "") gShowText = (integer)sh;
+    string u = llLinksetDataRead("lv.uses");
+    if (u != "") gUses = (integer)u;
+    string o = llLinksetDataRead("lv.orbit");
+    if (o != "") gOrbit = (integer)o;
+}
+
+string ClipHover(string s)
+{
+    // llSetText ~254 bytes; leave room for status line
+    if (llStringLength(s) > 180) s = llGetSubString(s, 0, 179);
+    return s;
+}
+
+vector HoverColor()
+{
+    vector tc = <1.00, 0.82, 0.90>;
+    string col = llLinksetDataRead("lv.color");
+    if (col == "") return tc;
+    list p = llParseString2List(col, [" "], []);
+    if (llGetListLength(p) < 3) return tc;
+    return <(float)llList2String(p, 0), (float)llList2String(p, 1), (float)llList2String(p, 2)>;
+}
+
+integer TokenOk(key id, string body)
+{
+    if (TokenMissing()) return TRUE;
+    string qs = llGetHTTPHeader(id, "x-query-string");
+    string qtok = "";
+    integer p = llSubStringIndex(llToLower(qs), "token=");
+    if (p >= 0)
+    {
+        qtok = llGetSubString(qs, p + 6, -1);
+        integer a = llSubStringIndex(qtok, "&");
+        if (a >= 0) qtok = llGetSubString(qtok, 0, a - 1);
+    }
+    string htok = llGetHTTPHeader(id, "x-api-token");
+    string btok = "";
+    if (body != "")
+    {
+        string j = llJsonGetValue(body, ["token"]);
+        if (j != JSON_INVALID) btok = j;
+    }
+    if (qtok == TOKEN || htok == TOKEN || btok == TOKEN) return TRUE;
     return FALSE;
 }
 
-HandlePrompt(string msg)
+string LiveBar(float x)
 {
-    integer kind = gPromptKind;
-    gPromptKind = PROMPT_NONE;
-    msg = llStringTrim(msg, STRING_TRIM);
-    if (msg == "")
+    integer n = (integer)(x * 10.0 + 0.5);
+    if (n < 0) n = 0;
+    if (n > 10) n = 10;
+    string s = "";
+    integer i;
+    for (i = 0; i < 10; ++i)
     {
-        llOwnerSay("Setup cancelled.");
-        return;
+        if (i < n) s += "●";
+        else s += "○";
     }
-    integer link = (llSubStringIndex(msg, "http") == 0
-        || llSubStringIndex(msg, "/r/") >= 0
-        || llSubStringIndex(llToLower(msg), "token=") >= 0);
-    if (kind == PROMPT_TOKEN)
+    return s;
+}
+
+float VibeX()
+{
+    integer vmax = gVMax;
+    if (vmax < 1) vmax = 20;
+    float x = 0.0;
+    if (gConnected && gVib > 0) x = (float)gVib / (float)vmax;
+    if (x > 1.0) x = 1.0;
+    return x;
+}
+
+PulseLook()
+{
+    llMessageLinked(LINK_SET, 0xC07E,
+        "LOOK|fx|" + (string)gVib + "|" + (string)gVMax + "|"
+        + (string)gConnected + "|" + (string)gPaired + "|"
+        + (string)gAim, NULL_KEY);
+}
+
+Paint()
+{
+    float x = VibeX();
+    PulseLook();
+    string body = "";
+    vector tc = HoverColor();
+    if (gShowText)
     {
-        if (link)
+        string line;
+        if (gUrl == "")
+            line = "getting URL…";
+        else if (!gPaired)
+            line = "paste PAIR URL in app";
+        else
         {
-            string b = ExtractBase(msg);
-            string t = ExtractToken(msg);
-            if (t != "") TOKEN = t;
-            if (llSubStringIndex(b, "http") == 0)
+            integer pct = (integer)(x * 100.0 + 0.5);
+            if (!gConnected && gVib <= 0)
+                line = LiveBar(0.0) + "  PC · no toy";
+            else
             {
-                BASE_URL = b;
-                llOwnerSay("TOKEN+URL OK. BASE=" + BASE_URL);
-                DoGet("/sl/status", "");
-                return;
+                line = LiveBar(x) + "  " + (string)pct + "%";
+                if (gPump > 0) line += "  P" + (string)gPump;
             }
+            line += "\nuses " + (string)gUses;
         }
-        TOKEN = ExtractToken(msg);
-        llOwnerSay("TOKEN saved (" + (string)llStringLength(TOKEN) + " ch). Paste URL next.");
-        PromptUrl();
+        string title = HOVER;
+        if (title == "") title = "✦  Lovense";
+        body = title + "\n" + line;
+    }
+    if (gEnerTxt != "")
+    {
+        if (body != "") body += "\n";
+        body += gEnerTxt;
+    }
+    if (gTipTxt != "")
+    {
+        if (body != "") body += "\n";
+        body += gTipTxt;
+    }
+    if (gNeedsTxt != "")
+    {
+        if (body != "") body += "\n";
+        body += gNeedsTxt;
+    }
+    if (body == "")
+    {
+        llSetText("", ZERO_VECTOR, 0.0);
         return;
     }
-    if (kind == PROMPT_URL)
+    if (llStringLength(body) > 250) body = llGetSubString(body, 0, 249);
+    llSetText(body, tc, 1.0);
+}
+
+ClickMode()
+{
+    // Orb is always a touch menu. Pay lives on the ground tip-jar vessel.
+    llSetClickAction(CLICK_ACTION_TOUCH);
+    llSetLinkPrimitiveParamsFast(LINK_SET, [PRIM_CLICK_ACTION, CLICK_ACTION_TOUCH]);
+}
+
+SetupLook()
+{
+    ClickMode();
+    Paint();
+    llMessageLinked(LINK_SET, 0xC07E, "LOOK|init", NULL_KEY);
+}
+
+AskUrl()
+{
+    if (gUrl != "")
     {
-        if (llSubStringIndex(msg, "/r/") >= 0)
+        llReleaseURL(gUrl);
+        gUrl = "";
+    }
+    gPaired = FALSE;
+    gUrlReq = llRequestSecureURL();
+    Paint();
+}
+
+SayPair()
+{
+    if (gUrl == "")
+    {
+        llOwnerSay("PAIR URL not ready yet — click URL again in a moment.");
+        return;
+    }
+    llOwnerSay("PAIR URL — paste in Lovense Controller → Second Life:");
+    llOwnerSay(gUrl);
+}
+
+Tell(key who, string m)
+{
+    if (who == NULL_KEY || who == llGetOwner()) llOwnerSay(m);
+    else
+        llInstantMessage(who, m);
+}
+
+OpenListen(key who)
+{
+    gMenuChan = 0x80000000 | (integer)llFrand(0x7FFFFFFF);
+    llListenRemove(gMenuListen);
+    gMenuListen = llListen(gMenuChan, "", who, "");
+}
+
+Queue(string pend)
+{
+    if (pend != "stop")
+    {
+        if (gUser != NULL_KEY) gAim = gUser;
+        gUses += 1;
+        SaveUses();
+        PulseNeeds("queue");
+        if (!gConnected)
         {
-            string t = ExtractToken(msg);
-            if (llStringLength(t) > 4) TOKEN = t;
+            llMessageLinked(LINK_SET, 0xC07E, "EN|add|" + pend, gUser);
+            Paint();
+            if (gUser != NULL_KEY && gUser != llGetOwner())
+                Tell(gUser, "stored to energy");
+            return;
         }
-        BASE_URL = ExtractBase(msg);
-        llOwnerSay("BASE_URL=" + BASE_URL);
-        if (TokenMissing()) PromptToken();
-        else DoGet("/sl/status", "");
+        gPend = pend;
     }
+    else
+    {
+        gPend = "stop";
+        gVib = 0;
+        gAim = NULL_KEY;
+        PulseNeeds("stop");
+    }
+    Paint();
+    if (!gPaired)
+        llOwnerSay("queued uses=" + (string)gUses + " — PC NOT paired. Touch → URL, paste PAIR URL in the app.");
+    else
+        llOwnerSay("queued uses=" + (string)gUses);
+    if (gUser != NULL_KEY && gUser != llGetOwner())
+        Tell(gUser, "queued · uses " + (string)gUses);
 }
 
-DoGet(string path, string query)
+// Tip jar / extra objects: LVQ|i|0.5|8   LVQ|v|12|6   LVQ|p|pulse|10   LVQ|stop
+ApplyCmd(string msg)
 {
-    if (TokenMissing())
+    if (llGetSubString(msg, 0, 3) != "LVQ|") return;
+    list p = llParseString2List(msg, ["|"], []);
+    string k = llList2String(p, 1);
+    if (k == "stop")
     {
-        llOwnerSay("No TOKEN.");
-        PromptToken();
+        Queue("stop");
         return;
     }
-    string q = "token=" + llEscapeURL(TOKEN);
-    if (query != "") q += "&" + query;
-    gBusy = TRUE;
-    Look();
-    gReq = llHTTPRequest(UrlJoin(path, q),
-        [HTTP_METHOD, "GET",
-         HTTP_VERBOSE_THROTTLE, FALSE,
-         HTTP_BODY_MAXLENGTH, 4096,
-         HTTP_PRAGMA, "no-cache",
-         HTTP_USER_AGENT, "LovenseHUD/1.4",
-         HTTP_CUSTOM_HEADER, "Accept", "application/json",
-         HTTP_EXTENDED_ERROR, TRUE], "");
+    if (k == "i" || k == "v" || k == "p")
+        Queue(k + "|" + llList2String(p, 2) + "|" + llList2String(p, 3));
+    else if (k == "r")
+        Queue(k + "|" + llList2String(p, 2) + "|" + llList2String(p, 3)
+            + "|" + llList2String(p, 4));
 }
 
-CmdV(integer level, float t)
+ApplyBuzz(string str, key payer)
 {
-    if (level < 0) level = 0;
-    if (level > 20) level = 20;
-    DoGet("/sl/vibrate", "level=" + (string)level + "&time=" + (string)t);
+    // TJ|buzz|i|0.28|6|<payer>
+    list p = llParseString2List(str, ["|"], []);
+    if (llList2String(p, 0) != "TJ" || llList2String(p, 1) != "buzz") return;
+    key who = (key)llList2String(p, 5);
+    if (who == NULL_KEY) who = payer;
+    if (who != NULL_KEY)
+    {
+        gUser = who;
+        gAim = who;
+    }
+    string k = llList2String(p, 2);
+    if (k == "stop") Queue("stop");
+    else if (k == "i" || k == "v" || k == "p")
+        Queue(k + "|" + llList2String(p, 3) + "|" + llList2String(p, 4));
+    else if (k == "r")
+        Queue(k + "|" + llList2String(p, 3) + "|" + llList2String(p, 4)
+            + "|" + llList2String(p, 5));
 }
 
-CmdI(float i, float t)
+string StLine()
 {
-    if (i < 0.0) i = 0.0;
-    if (i > 1.0) i = 1.0;
-    DoGet("/sl/intensity", "i=" + (string)i + "&time=" + (string)t);
-}
-
-CmdPreset(string name, float t)
-{
-    DoGet("/sl/preset", "name=" + llEscapeURL(name) + "&time=" + (string)t);
-}
-
-// Full web panel URL (clickable in dialog/chat). HUD API uses BASE only.
-string PanelUrl()
-{
-    return TrimSlash(BASE_URL) + "/r/" + TOKEN;
-}
-
-string MenuHeader(string title)
-{
-    string tok = TOKEN;
-    if (TokenMissing()) tok = "(not set)";
-    string link = "(set BASE+TOKEN)";
-    if (!TokenMissing() && !BaseUrlNeedsSetup())
-        link = PanelUrl();
-    // llDialog message: both link (blue) and token for the web panel
-    return title + "\n" + link + "\nTOKEN: " + tok;
+    if (!gPaired) return "not paired";
+    if (!gConnected) return "off";
+    return (string)gVib + "/" + (string)gVMax;
 }
 
 MenuMain()
 {
     gPromptKind = PROMPT_NONE;
-    OpenListen();
-    string st = "off";
-    if (gConnected) st = "on";
-    llDialog(llGetOwner(), MenuHeader("Lovense [" + st + "]"),
-        ["STOP", "Status", "Power", "Presets",
-         "Long", "Patterns", "50%", "MAX",
-         "Setup", "Help", "25%", "75%"],
-        gMenuChan);
+    OpenListen(gUser);
+    list b = ["STOP", "Power", "Presets", "Long",
+              "Patterns", "50%", "MAX", "25%",
+              "75%", "URL"];
+    if (gUser == llGetOwner())
+        b += ["Setup", "Rez jar"];
+    else
+        b += ["Help", "-"];
+    llDialog(gUser, "Lovense [" + StLine() + "]\none click = this menu", b, gMenuChan);
 }
 
 MenuPower()
 {
-    OpenListen();
-    llDialog(llGetOwner(), "Power " + (string)((integer)DEFAULT_TIME) + "s",
+    OpenListen(gUser);
+    llDialog(gUser, "Power " + (string)((integer)DEFAULT_TIME) + "s",
         ["0", "5", "10", "15", "20", "30%", "60%", "«"], gMenuChan);
 }
 
 MenuPresets()
 {
-    OpenListen();
-    llDialog(llGetOwner(), "Presets",
+    OpenListen(gUser);
+    llDialog(gUser, "Presets",
         ["Pulse", "Wave", "Fireworks", "Earthquake",
          "Tease", "Edge", "Heartbeat", "«"], gMenuChan);
 }
 
 MenuLong()
 {
-    OpenListen();
-    llDialog(llGetOwner(), "Long",
+    OpenListen(gUser);
+    llDialog(gUser, "Long",
         ["Slowburn", "Marathon", "Crescendo", "Afterglow",
          "Imperial", "«", "-", "-"], gMenuChan);
 }
 
 MenuPat()
 {
-    OpenListen();
-    llDialog(llGetOwner(), "Patterns",
+    OpenListen(gUser);
+    llDialog(gUser, "Patterns",
         ["Strobe", "Build", "Swing", "Sine", "Ramp", "Imperial", "«", "-"],
         gMenuChan);
 }
 
 MenuSetup()
 {
-    OpenListen();
-    llDialog(llGetOwner(), MenuHeader("Setup"),
-        ["Token", "URL", "Status", "Help", "«", "-", "-", "-"], gMenuChan);
+    if (gUser != llGetOwner()) return;
+    OpenListen(gUser);
+    string lock = "Unlock";
+    if (PUBLIC) lock = "Lock";
+    string orb = "Orbit off";
+    if (!gOrbit) orb = "Orbit on";
+    list b = ["Hover", "Token", lock, "Needs",
+              "Hide text", "Show text", orb, "Stats",
+              "Color", "Tip jar", "Rez jar", "Help"];
+    llDialog(gUser, "Setup  PUBLIC=" + (string)PUBLIC + "  uses=" + (string)gUses,
+        b, gMenuChan);
+}
+
+MenuStats()
+{
+    if (gUser != llGetOwner()) return;
+    OpenListen(gUser);
+    string tips = gTipTxt;
+    if (tips == "") tips = "none";
+    llDialog(gUser,
+        "Stats\nuses " + (string)gUses + "\ntips " + tips,
+        ["Clear uses", "Clear tips", "Clear all", "Replay",
+         "Clear E", "«", "-", "-"],
+        gMenuChan);
+}
+
+ClearUses()
+{
+    gUses = 0;
+    SaveUses();
+    Paint();
+    llOwnerSay("Uses reset to 0.");
+}
+
+ClearTips()
+{
+    gTipTxt = "";
+    Paint();
+    llMessageLinked(LINK_SET, 0xC07E, "JAR|reset", gUser);
+    llOwnerSay("Tip totals reset.");
 }
 
 Help()
 {
-    llOwnerSay("Lovense HUD | BASE=" + TrimSlash(BASE_URL));
-    if (TokenMissing()) llOwnerSay("TOKEN: (not set)");
-    else
+    Tell(gUser, "One click = one menu. PC app polls this object (no tunnel).");
+    if (gUser == llGetOwner())
     {
-        llOwnerSay("TOKEN: " + TOKEN);
-        if (!BaseUrlNeedsSetup())
-            llOwnerSay("Panel: " + PanelUrl());
+        Tell(gUser, "Rez jar needs LovenseJarHost in this Glass plus a COPY named LovenseTipJar.");
+        SayPair();
+        llOwnerSay("PUBLIC=" + (string)PUBLIC);
     }
-    llOwnerSay("/" + (string)CHAT_CHANNEL + " stop|status|v 12|i 0.6|preset imperial|menu|token|url");
 }
 
 integer OnBtn(string msg)
 {
-    if (msg == "✖" || msg == "-" || msg == " ") return TRUE;
+    if (msg == "-" || msg == " " || msg == "✖") return TRUE;
     if (msg == "«") { MenuMain(); return TRUE; }
-    if (msg == "STOP") { DoGet("/sl/stop", ""); return TRUE; }
-    if (msg == "Status") { DoGet("/sl/status", ""); return TRUE; }
+    if (msg == "URL") { if (gUser == llGetOwner()) SayPair(); return TRUE; }
+    if (msg == "STOP") { Queue("stop"); return TRUE; }
     if (msg == "Power") { MenuPower(); return TRUE; }
     if (msg == "Presets") { MenuPresets(); return TRUE; }
     if (msg == "Long") { MenuLong(); return TRUE; }
     if (msg == "Patterns") { MenuPat(); return TRUE; }
-    if (msg == "Setup") { MenuSetup(); return TRUE; }
-    if (msg == "Token") { PromptToken(); return TRUE; }
-    if (msg == "URL") { PromptUrl(); return TRUE; }
+    if (msg == "Setup")
+    {
+        if (gUser == llGetOwner()) MenuSetup();
+        return TRUE;
+    }
+    if (msg == "Hover")
+    {
+        if (gUser != llGetOwner()) return TRUE;
+        OpenListen(llGetOwner());
+        gPromptKind = PROMPT_HOVER;
+        string cur = HOVER;
+        if (cur == "") cur = "(default: ✦  Lovense)";
+        llTextBox(llGetOwner(),
+            "Hover text over the bar.\nEmpty = default.\nUse \\n for a new line.\nNow: " + cur,
+            gMenuChan);
+        return TRUE;
+    }
+    if (msg == "Token")
+    {
+        if (gUser != llGetOwner()) return TRUE;
+        OpenListen(llGetOwner());
+        gPromptKind = PROMPT_TOKEN;
+        llTextBox(llGetOwner(), "TOKEN (empty=cancel)", gMenuChan);
+        return TRUE;
+    }
+    if (msg == "Lock")
+    {
+        if (gUser == llGetOwner())
+        {
+            PUBLIC = FALSE;
+            SaveCfg();
+            llOwnerSay("Locked — owner only.");
+        }
+        return TRUE;
+    }
+    if (msg == "Unlock")
+    {
+        if (gUser == llGetOwner())
+        {
+            PUBLIC = TRUE;
+            SaveCfg();
+            llOwnerSay("Unlocked — anyone can control.");
+        }
+        return TRUE;
+    }
+    if (msg == "Stats")
+    {
+        if (gUser == llGetOwner()) MenuStats();
+        return TRUE;
+    }
+    if (msg == "Clear uses" || msg == "Reset #")
+    {
+        if (gUser == llGetOwner()) ClearUses();
+        return TRUE;
+    }
+    if (msg == "Clear tips")
+    {
+        if (gUser == llGetOwner()) ClearTips();
+        return TRUE;
+    }
+    if (msg == "Clear all")
+    {
+        if (gUser == llGetOwner())
+        {
+            ClearUses();
+            ClearTips();
+        }
+        return TRUE;
+    }
+    if (msg == "Replay")
+    {
+        if (gUser == llGetOwner())
+        {
+            gPend = "replay";
+            llOwnerSay("Replay queued — connect the toy on the PC.");
+        }
+        return TRUE;
+    }
+    if (msg == "Clear E")
+    {
+        if (gUser == llGetOwner())
+        {
+            gPend = "clearbank";
+            gEnerTxt = "";
+            llMessageLinked(LINK_SET, 0xC07E, "EN|clear", gUser);
+            Paint();
+        }
+        return TRUE;
+    }
+    if (msg == "Color")
+    {
+        if (gUser == llGetOwner())
+            llMessageLinked(LINK_SET, 0xC07E, "EN|color", gUser);
+        return TRUE;
+    }
+    if (msg == "Orbit off")
+    {
+        if (gUser == llGetOwner())
+        {
+            gOrbit = FALSE;
+            SaveCfg();
+            llMessageLinked(LINK_SET, 0xC07E, "LOOK|orbit|0", NULL_KEY);
+            llOwnerSay("Orbit off.");
+        }
+        return TRUE;
+    }
+    if (msg == "Orbit on")
+    {
+        if (gUser == llGetOwner())
+        {
+            gOrbit = TRUE;
+            SaveCfg();
+            llMessageLinked(LINK_SET, 0xC07E, "LOOK|orbit|1", NULL_KEY);
+            llOwnerSay("Orbit on.");
+        }
+        return TRUE;
+    }
+    if (msg == "Needs")
+    {
+        if (gUser == llGetOwner())
+            llMessageLinked(LINK_SET, 0xC07E, "NEEDSMENU", gUser);
+        return TRUE;
+    }
+    if (msg == "Tip jar")
+    {
+        if (gUser == llGetOwner())
+            llMessageLinked(LINK_SET, 0xC07E, "JAR|menu", gUser);
+        return TRUE;
+    }
+    if (msg == "Rez jar")
+    {
+        if (gUser == llGetOwner())
+            llMessageLinked(LINK_SET, 0xC07E, "JAR|rez", gUser);
+        return TRUE;
+    }
+    if (msg == "Hide text")
+    {
+        gShowText = FALSE;
+        SaveCfg();
+        Paint();
+        return TRUE;
+    }
+    if (msg == "Show text")
+    {
+        gShowText = TRUE;
+        SaveCfg();
+        Paint();
+        return TRUE;
+    }
     if (msg == "Help") { Help(); return TRUE; }
-    if (msg == "25%") { CmdI(0.25, DEFAULT_TIME); return TRUE; }
-    if (msg == "50%") { CmdI(0.50, DEFAULT_TIME); return TRUE; }
-    if (msg == "75%") { CmdI(0.75, DEFAULT_TIME); return TRUE; }
-    if (msg == "30%") { CmdI(0.30, DEFAULT_TIME); return TRUE; }
-    if (msg == "60%") { CmdI(0.60, DEFAULT_TIME); return TRUE; }
-    if (msg == "MAX") { CmdI(1.0, DEFAULT_TIME); return TRUE; }
+    if (msg == "25%") { Queue("i|0.25|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "50%") { Queue("i|0.50|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "75%") { Queue("i|0.75|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "30%") { Queue("i|0.30|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "60%") { Queue("i|0.60|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "MAX") { Queue("i|1.0|" + (string)DEFAULT_TIME); return TRUE; }
     if (msg == "0" || msg == "5" || msg == "10" || msg == "15" || msg == "20")
-    { CmdV((integer)msg, DEFAULT_TIME); return TRUE; }
-    if (msg == "Pulse") { CmdPreset("pulse", 10); return TRUE; }
-    if (msg == "Wave") { CmdPreset("wave", 12); return TRUE; }
-    if (msg == "Fireworks") { CmdPreset("fireworks", 10); return TRUE; }
-    if (msg == "Earthquake") { CmdPreset("earthquake", 12); return TRUE; }
-    if (msg == "Tease") { CmdPreset("tease", 15); return TRUE; }
-    if (msg == "Edge") { CmdPreset("edge", 14); return TRUE; }
-    if (msg == "Heartbeat") { CmdPreset("heartbeat", 16); return TRUE; }
-    if (msg == "Slowburn") { CmdPreset("slowburn", 45); return TRUE; }
-    if (msg == "Marathon") { CmdPreset("marathon", 60); return TRUE; }
-    if (msg == "Crescendo") { CmdPreset("crescendo", 40); return TRUE; }
-    if (msg == "Afterglow") { CmdPreset("afterglow", 35); return TRUE; }
-    if (msg == "Imperial") { CmdPreset("imperial", 24); return TRUE; }
-    if (msg == "Strobe")
-    { DoGet("/sl/pattern", "strength=" + llEscapeURL("20;0;20;0;20;0") + "&interval=200&time=10"); return TRUE; }
-    if (msg == "Build")
-    { DoGet("/sl/pattern", "strength=" + llEscapeURL("4;8;12;16;20;16;12;8") + "&interval=120&time=12"); return TRUE; }
-    if (msg == "Swing")
-    { DoGet("/sl/pattern", "strength=" + llEscapeURL("20;15;10;5;10;15;20") + "&interval=150&time=12"); return TRUE; }
-    if (msg == "Sine")
-    { DoGet("/sl/pattern", "strength=" + llEscapeURL("5;10;15;20;15;10;5") + "&interval=220&time=16"); return TRUE; }
-    if (msg == "Ramp")
-    { DoGet("/sl/pattern", "strength=" + llEscapeURL("2;6;10;14;18;20;14;8;2") + "&interval=300&time=20"); return TRUE; }
+    { Queue("v|" + msg + "|" + (string)DEFAULT_TIME); return TRUE; }
+    if (msg == "Pulse") { Queue("p|pulse|10"); return TRUE; }
+    if (msg == "Wave") { Queue("p|wave|12"); return TRUE; }
+    if (msg == "Fireworks") { Queue("p|fireworks|10"); return TRUE; }
+    if (msg == "Earthquake") { Queue("p|earthquake|12"); return TRUE; }
+    if (msg == "Tease") { Queue("p|tease|15"); return TRUE; }
+    if (msg == "Edge") { Queue("p|edge|14"); return TRUE; }
+    if (msg == "Heartbeat") { Queue("p|heartbeat|16"); return TRUE; }
+    if (msg == "Slowburn") { Queue("p|slowburn|45"); return TRUE; }
+    if (msg == "Marathon") { Queue("p|marathon|60"); return TRUE; }
+    if (msg == "Crescendo") { Queue("p|crescendo|40"); return TRUE; }
+    if (msg == "Afterglow") { Queue("p|afterglow|35"); return TRUE; }
+    if (msg == "Imperial") { Queue("p|imperial|24"); return TRUE; }
+    if (msg == "Strobe") { Queue("r|20;0;20;0;20;0|200|10"); return TRUE; }
+    if (msg == "Build") { Queue("r|4;8;12;16;20;16;12;8|120|12"); return TRUE; }
+    if (msg == "Swing") { Queue("r|20;15;10;5;10;15;20|150|12"); return TRUE; }
+    if (msg == "Sine") { Queue("r|5;10;15;20;15;10;5|220|16"); return TRUE; }
+    if (msg == "Ramp") { Queue("r|2;6;10;14;18;20;14;8;2|300|20"); return TRUE; }
     return FALSE;
 }
 
-OnChat(string msg)
+string PendJson()
 {
-    msg = llStringTrim(msg, STRING_TRIM);
-    string low = llToLower(msg);
-    if (OnBtn(msg)) return;
-    if (low == "help" || low == "?") { Help(); return; }
-    if (low == "menu") { MenuMain(); return; }
-    if (low == "setup" || low == "config") { MenuSetup(); return; }
-    if (low == "token") { PromptToken(); return; }
-    if (low == "url" || low == "base") { PromptUrl(); return; }
-    if (low == "stop" || low == "off") { DoGet("/sl/stop", ""); return; }
-    if (low == "status" || low == "ping") { DoGet("/sl/status", ""); return; }
-    if (llGetSubString(low, 0, 1) == "v ")
+    if (gPend == "replay") return "{\"action\":\"replay\"}";
+    if (gPend == "clearbank") return "{\"action\":\"clearbank\"}";
+    if (gPend == "") return "null";
+    if (gPend == "stop") return "{\"action\":\"stop\"}";
+    list p = llParseString2List(gPend, ["|"], []);
+    string k = llList2String(p, 0);
+    if (k == "v")
+        return "{\"action\":\"vibrate\",\"level\":" + llList2String(p, 1)
+            + ",\"time\":" + llList2String(p, 2) + "}";
+    if (k == "i")
+        return "{\"action\":\"intensity\",\"i\":" + llList2String(p, 1)
+            + ",\"time\":" + llList2String(p, 2) + "}";
+    if (k == "p")
+        return "{\"action\":\"preset\",\"name\":\"" + JsonEsc(llList2String(p, 1))
+            + "\",\"time\":" + llList2String(p, 2) + "}";
+    if (k == "r")
+        return "{\"action\":\"pattern\",\"strength\":\"" + JsonEsc(llList2String(p, 1))
+            + "\",\"interval\":" + llList2String(p, 2)
+            + ",\"time\":" + llList2String(p, 3) + "}";
+    return "null";
+}
+
+CfgLine(string line)
+{
+    line = llStringTrim(line, STRING_TRIM);
+    if (line == "" || llGetSubString(line, 0, 0) == "#") return;
+    integer eq = llSubStringIndex(line, "=");
+    if (eq < 1) return;
+    string k = llToLower(llStringTrim(llGetSubString(line, 0, eq - 1), STRING_TRIM));
+    string v = llStringTrim(llGetSubString(line, eq + 1, -1), STRING_TRIM);
+    if (k == "token")
     {
-        list p = llParseString2List(msg, [" "], []);
-        float t = DEFAULT_TIME;
-        if (llGetListLength(p) >= 3) t = (float)llList2String(p, 2);
-        CmdV((integer)llList2String(p, 1), t);
-        return;
+        if (TokenLooksOk(v)) TOKEN = v;
     }
-    if (llGetSubString(low, 0, 1) == "i ")
+    else if (k == "hover" || k == "text" || k == "hovertext")
+        HOVER = ClipHover(HoverUnescape(v));
+    else if (k == "time" || k == "default_time") DEFAULT_TIME = (float)v;
+    else if (k == "attach") ATTACH_POINT = (integer)v;
+    else if (k == "public")
     {
-        list p = llParseString2List(msg, [" "], []);
-        float t = DEFAULT_TIME;
-        if (llGetListLength(p) >= 3) t = (float)llList2String(p, 2);
-        CmdI((float)llList2String(p, 1), t);
-        return;
+        string lv = llToLower(v);
+        PUBLIC = !(lv == "0" || lv == "false" || lv == "off" || lv == "no");
     }
-    if (llGetSubString(low, 0, 6) == "preset ")
-    {
-        list p = llParseString2List(msg, [" "], []);
-        float t = 0.0;
-        if (llGetListLength(p) >= 3) t = (float)llList2String(p, 2);
-        CmdPreset(llToLower(llList2String(p, 1)), t);
-        return;
-    }
-    llOwnerSay("Unknown — help");
+    else if (k == "color" || k == "text_color")
+        llMessageLinked(LINK_SET, 0xC07E, "EN|set|" + v, NULL_KEY);
 }
 
 integer ReadNote()
@@ -497,32 +751,14 @@ integer ReadNote()
     return TRUE;
 }
 
-CfgLine(string line)
-{
-    line = llStringTrim(line, STRING_TRIM);
-    if (line == "" || llGetSubString(line, 0, 0) == "#") return;
-    integer eq = llSubStringIndex(line, "=");
-    if (eq < 1) return;
-    string k = llToLower(llStringTrim(llGetSubString(line, 0, eq - 1), STRING_TRIM));
-    string v = llStringTrim(llGetSubString(line, eq + 1, -1), STRING_TRIM);
-    if (k == "base_url" || k == "base" || k == "url") BASE_URL = v;
-    else if (k == "token") TOKEN = v;
-    else if (k == "channel") CHAT_CHANNEL = (integer)v;
-    else if (k == "time" || k == "default_time") DEFAULT_TIME = (float)v;
-    else if (k == "hud" || k == "attach") HUD_ATTACH_POINT = (integer)v;
-}
-
 TryAttach()
 {
-    if (llGetAttached())
+    integer a = llGetAttached();
+    if (a)
     {
-        integer p = llGetAttached();
-        if (p >= 31 && p <= 38)
-        {
-            SetupHud();
-            return;
-        }
-        llOwnerSay("Worn but not HUD. Attach to HUD → Bottom Right.");
+        if (a >= 31 && a <= 38)
+            llOwnerSay("BODY object, not HUD. Wear on Head or Chest.");
+        SetupLook();
         return;
     }
     if (!gAttachTried)
@@ -536,31 +772,56 @@ default
 {
     state_entry()
     {
+        // Child prims must not run this (stack-heap). Glass root only.
+        if (llGetLinkNumber() > 1)
+        {
+            llOwnerSay("Controller belongs in Glass (root). Removing this copy.");
+            llRemoveInventory(llGetScriptName());
+            return;
+        }
         gConnected = FALSE;
-        gLastMsg = "";
-        gBusy = FALSE;
+        gVib = 0;
+        gVMax = 20;
+        gPump = 0;
+        gShowText = FALSE;
         gAttachTried = FALSE;
         gPromptKind = PROMPT_NONE;
         gNotePending = FALSE;
-        gHttpCode = 0;
-        gLastFaceTex = NULL_KEY;
-        SetupHud();
+        gUser = NULL_KEY;
+        gAim = NULL_KEY;
+        gUrl = "";
+        gPend = "";
+        gUses = LoadUses();
+        gPaired = FALSE;
+        gCoolAt = -10.0;
+        gOrbit = TRUE;
+        gNeedsTxt = "";
+        gTipTxt = "";
+        gEnerTxt = "";
+        LoadCfg();
+        gShowText = FALSE;
+        if (!TokenMissing()) SaveCfg();
+        llOwnerSay("Lovense: click = menu. URL to pair. Look + JarHost + Energy in Glass.");
+        SetupLook();
         ReadNote();
-        gListen = llListen(CHAT_CHANNEL, "", llGetOwner(), "");
-        llOwnerSay("Lovense HUD ready. Touch=menu /" + (string)CHAT_CHANNEL + " help");
         TryAttach();
-        if (gNotePending) llSetTimerEvent(6.0);
-        else llSetTimerEvent(1.5);
+        AskUrl();
     }
 
-    on_rez(integer p) { gAttachTried = FALSE; llResetScript(); }
+    on_rez(integer p)
+    {
+        gAttachTried = FALSE;
+        TryAttach();
+        AskUrl();
+    }
 
     attach(key id)
     {
         if (id != NULL_KEY)
         {
-            SetupHud();
-            if (!MaybeSetup()) DoGet("/sl/status", "");
+            gShowText = FALSE;
+            SetupLook();
+            AskUrl();
         }
     }
 
@@ -568,13 +829,9 @@ default
     {
         if (perm & PERMISSION_ATTACH)
         {
-            integer point = HUD_ATTACH_POINT;
-            if (point >= 1 && point <= 16)
-            {
-                if (point == 10) point = 38;
-                else point = 38;
-            }
-            if (point < 31 || point > 38) point = 38;
+            integer point = ATTACH_POINT;
+            if (point >= 31 && point <= 38) point = 2;
+            if (point < 1 || point > 30) point = 2;
             llAttachToAvatar(point);
         }
     }
@@ -582,24 +839,71 @@ default
     changed(integer change)
     {
         if (change & CHANGED_INVENTORY) ReadNote();
-        if (change & CHANGED_OWNER) llResetScript();
-    }
-
-    timer()
-    {
-        llSetTimerEvent(0.0);
-        if (!llGetAttached())
-            llOwnerSay("Wear object or accept Attach (HUD).");
-        if (gNotePending) return;
-        if (gPromptKind != PROMPT_NONE) return;
-        if (!MaybeSetup()) DoGet("/sl/status", "");
+        if (change & CHANGED_OWNER)
+        {
+            llLinksetDataDelete("lv.ok");
+            llLinksetDataDelete("lv.token");
+            llLinksetDataDelete("lv.tok");
+            llResetScript();
+        }
+        if (change & (CHANGED_REGION | CHANGED_REGION_START | CHANGED_TELEPORT))
+        {
+            LoadCfg();
+            if (!TokenMissing()) SaveCfg();
+            AskUrl();
+        }
     }
 
     touch_start(integer n)
     {
-        if (llDetectedKey(0) != llGetOwner()) return;
-        if (TokenMissing()) PromptToken();
-        else MenuMain();
+        key who = llDetectedKey(0);
+        if (who != llGetOwner() && !PUBLIC)
+        {
+            llInstantMessage(who, "Owner locked this control.");
+            return;
+        }
+        if (llGetTime() - gCoolAt < 0.6 && who == gUser)
+        {
+            MenuMain();
+            return;
+        }
+        gCoolAt = llGetTime();
+        gUser = who;
+        MenuMain();
+    }
+
+    link_message(integer sender, integer num, string str, key id)
+    {
+        if (num != 0xC07E) return;
+        if (llGetSubString(str, 0, 8) == "NEEDSTXT|")
+        {
+            gNeedsTxt = llGetSubString(str, 9, -1);
+            Paint();
+            return;
+        }
+        if (llGetSubString(str, 0, 6) == "TIPTXT|")
+        {
+            gTipTxt = llGetSubString(str, 7, -1);
+            Paint();
+            return;
+        }
+        if (llGetSubString(str, 0, 7) == "ENERTXT|")
+        {
+            gEnerTxt = llGetSubString(str, 8, -1);
+            Paint();
+            return;
+        }
+        if (str == "EN|repaint")
+        {
+            Paint();
+            return;
+        }
+        if (llGetSubString(str, 0, 7) == "TJ|buzz|")
+        {
+            ApplyBuzz(str, id);
+            return;
+        }
+        ApplyCmd(str);
     }
 
     dataserver(key id, string data)
@@ -614,104 +918,111 @@ default
         else
         {
             gNotePending = FALSE;
-            llListenRemove(gListen);
-            gListen = llListen(CHAT_CHANNEL, "", llGetOwner(), "");
-            if (!MaybeSetup()) DoGet("/sl/status", "");
+            if (!TokenMissing()) SaveCfg();
+            Paint();
         }
     }
 
     listen(integer channel, string name, key id, string msg)
     {
-        if (id != llGetOwner()) return;
-        if (channel == gMenuChan)
+        if (channel != gMenuChan) return;
+        if (id != gUser) return;
+        if (gPromptKind == PROMPT_TOKEN)
         {
-            if (gPromptKind != PROMPT_NONE) HandlePrompt(msg);
-            else OnBtn(msg);
+            gPromptKind = PROMPT_NONE;
+            msg = llStringTrim(msg, STRING_TRIM);
+            if (msg != "")
+            {
+                TOKEN = msg;
+                SaveCfg();
+                llOwnerSay("TOKEN saved (kept after sim change).");
+            }
             return;
         }
-        if (channel == CHAT_CHANNEL) OnChat(msg);
+        if (gPromptKind == PROMPT_HOVER)
+        {
+            gPromptKind = PROMPT_NONE;
+            msg = llStringTrim(msg, STRING_TRIM);
+            if (msg == "")
+            {
+                HOVER = "";
+                llOwnerSay("Hover reset to default.");
+            }
+            else
+            {
+                HOVER = ClipHover(HoverUnescape(msg));
+                llOwnerSay("Hover saved.");
+            }
+            SaveCfg();
+            Paint();
+            return;
+        }
+        OnBtn(msg);
     }
 
-    http_response(key id, integer status, list meta, string body)
+    http_request(key id, string method, string body)
     {
-        if (id != gReq) return;
-        gBusy = FALSE;
-        gHttpCode = status;
-        if (status >= 200 && status < 300)
+        if (method == URL_REQUEST_GRANTED)
         {
-            gHttpCode = 0;
-            if (llSubStringIndex(body, "\"connected\":false") >= 0
-                || llSubStringIndex(body, "\"connected\": false") >= 0)
-                gConnected = FALSE;
-            else if (llSubStringIndex(body, "\"connected\"") >= 0)
-                gConnected = TRUE;
-            else
-                gConnected = TRUE;
-            integer mi = llSubStringIndex(body, "\"message\"");
-            if (mi >= 0)
-            {
-                integer c1 = llSubStringIndex(llGetSubString(body, mi, -1), ":");
-                string rest = llGetSubString(body, mi + c1 + 1, -1);
-                integer q1 = llSubStringIndex(rest, "\"");
-                if (q1 >= 0)
-                {
-                    string r2 = llGetSubString(rest, q1 + 1, -1);
-                    integer q2 = llSubStringIndex(r2, "\"");
-                    if (q2 >= 0) gLastMsg = llGetSubString(r2, 0, q2 - 1);
-                }
-            }
-            else gLastMsg = "OK";
-            Look();
-            if (llSubStringIndex(body, "\"connected\"") >= 0)
-            {
-                string pc = "no toy";
-                if (gConnected) pc = "online";
-                llOwnerSay("PC: " + pc + " · " + llGetSubString(gLastMsg, 0, 50));
-            }
-            else if (gLastMsg != "")
-                llOwnerSay(llGetSubString(gLastMsg, 0, 60));
+            gUrl = body;
+            gPaired = FALSE;
+            Paint();
+            return;
         }
-        else if (status == 401)
+        if (method == URL_REQUEST_DENIED)
         {
-            gConnected = FALSE;
-            gLastMsg = "bad token";
-            Look();
-            llOwnerSay("401 bad TOKEN");
-            PromptToken();
+            gUrl = "";
+            llOwnerSay("SL URL denied — try another sim / reset script.");
+            Paint();
+            return;
         }
-        else if (status == 403)
+        if (!TokenOk(id, body))
         {
-            gConnected = FALSE;
-            string low = llToLower(body);
-            if (llSubStringIndex(low, "cloudflare") >= 0
-                || llSubStringIndex(low, "just a moment") >= 0
-                || llSubStringIndex(low, "cf-ray") >= 0
-                || llSubStringIndex(low, "challenge") >= 0)
-            {
-                gLastMsg = "cloudflare block";
-                Look();
-                llOwnerSay("403 Cloudflare blocks SL HUD. On PC use ngrok / Tailscale Funnel / Named tunnel (disable Bot Fight). Quick trycloudflare often fails from the grid.");
-            }
-            else
-            {
-                gLastMsg = "remote off";
-                Look();
-                llOwnerSay("403 enable remote panel on PC");
-            }
+            llHTTPResponse(id, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+            return;
         }
-        else if (status == 0 || status == 499)
+        method = llToUpper(method);
+        if (method == "POST")
         {
-            gConnected = FALSE;
-            gLastMsg = "HTTP " + (string)status;
-            Look();
-            llOwnerSay("HTTP " + (string)status + " — grid cannot reach BASE_URL. Need public HTTPS (not 192.168 / localhost). Start tunnel on PC, then Setup → URL.");
+            string c = llJsonGetValue(body, ["connected"]);
+            gConnected = (llToLower(c) == "true" || c == "1");
+            string n = llJsonGetValue(body, ["connected_count"]);
+            if (n != JSON_INVALID && ((integer)n) > 0) gConnected = TRUE;
+            string vs = llJsonGetValue(body, ["vibrate"]);
+            if (vs != JSON_INVALID && vs != "") gVib = (integer)vs;
+            if (gVib > 0) gConnected = TRUE;
+            string mx = llJsonGetValue(body, ["max_vibrate"]);
+            if (mx != JSON_INVALID && mx != "") gVMax = (integer)mx;
+            if (gVMax < 1) gVMax = 20;
+            string ps = llJsonGetValue(body, ["pump"]);
+            if (ps != JSON_INVALID && ps != "") gPump = (integer)ps;
+            string es = llJsonGetValue(body, ["energy"]);
+            string bk = llJsonGetValue(body, ["bank"]);
+            if (es != JSON_INVALID && es != "")
+                llMessageLinked(LINK_SET, 0xC07E, "EN|pc|" + es + "|" + bk, NULL_KEY);
+            gPaired = TRUE;
+            Paint();
+            PulseNeeds("vibe");
+            llHTTPResponse(id, 200, "{\"ok\":true}");
+            return;
+        }
+        // GET — PC is talking to us
+        gPaired = TRUE;
+        string pend;
+        string q = llLinksetDataRead("lv.bank");
+        if (q != "" && gPend != "clearbank")
+        {
+            pend = "{\"action\":\"bank\",\"q\":\"" + JsonEsc(q) + "\"}";
+            llLinksetDataWrite("lv.bank", "");
+            llLinksetDataWrite("lv.bankn", "0");
+            llMessageLinked(LINK_SET, 0xC07E, "EN|flush", NULL_KEY);
         }
         else
         {
-            gConnected = FALSE;
-            gLastMsg = "HTTP " + (string)status;
-            Look();
-            llOwnerSay("HTTP " + (string)status + " — tunnel/BASE_URL? " + llGetSubString(body, 0, 80));
+            pend = PendJson();
+            gPend = "";
         }
+        llHTTPResponse(id, 200,
+            "{\"ok\":true,\"service\":\"lovense-sl\",\"pending\":" + pend + "}");
     }
 }

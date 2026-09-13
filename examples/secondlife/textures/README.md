@@ -1,42 +1,35 @@
-# Lovense HUD status textures
+# Lovense sphere textures
 
-Ready-to-upload PNGs (512×256) for the Second Life HUD face.  
-The LSL script swaps them when status changes: **offline / online / busy / error**.
+Tekstury 1024×512 (equirectangular) na **kulę** w SL. Opcjonalne — bez nich skrypt i tak robi różowy orb z glow. Particle (spray gdy zabawka chodzi) nie potrzebują tych plików.
 
-| File | When shown |
-|------|------------|
-| `hud_offline.png` | PC/toy offline or not connected |
-| `hud_online.png` | Connected, idle |
-| `hud_busy.png` | HTTP request in progress |
-| `hud_error.png` | Bad token, remote off, HTTP error |
+| Plik | Kiedy |
+|------|--------|
+| `lovense_offline.png` | brak pary / brak zabawki |
+| `lovense_online.png` | połączone, cisza |
+| `lovense_active.png` | wibruje |
 
-## Upload to Second Life
+## W SL
 
-1. In SL: **Build → Upload → Image (L$10 each)** — upload all four PNGs.
-2. After each upload, open the texture → copy **UUID** (Asset UUID).
-3. Either:
-   - **A)** Paste UUIDs into the script:
+1. **Build → Upload → Image** (L$10 za każdą).
+2. Wrzuć do **Contents** obiektu.
+3. Nazwy dokładnie: `lovense_offline`, `lovense_online`, `lovense_active`.
+4. Wklej nowy skrypt i zresetuj.
 
-     ```lsl
-     key TEX_OFFLINE = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
-     key TEX_ONLINE  = "…";
-     key TEX_BUSY    = "…";
-     key TEX_ERROR   = "…";
-     ```
+## Particle (Contents Glass)
 
-   - **B)** Put the four **texture items** into the HUD object **Contents**  
-     and name them exactly: `hud_offline`, `hud_online`, `hud_busy`, `hud_error`  
-     (script resolves them via inventory — no UUID edit needed).
+Wrzucasz do **Contents roota (Glass)**. Nazwy zaczynają się od `p_`. Skrypt wyglądu losuje jedną przy sprayu i zmienia co ~2,5 s.
 
-4. **Reset** the script.
+| Plik | Co |
+|------|-----|
+| `particles/p_glow.png` | miękka poświata |
+| `particles/p_star.png` | gwiazdka |
+| `particles/p_spark.png` | iskrą / krzyżyk |
+| `particles/p_dot.png` | kropka z halo |
+| `particles/p_flake.png` | płatek |
 
-Without textures, the HUD still works with solid color + glow fallback.
-
-## Regenerate
+Białe + alpha — kolor daje skrypt (róż). Upload Image (L$10), wrzuć do Glass, **nie** do Pink/Cyan/Core. Bez `p_*` particle i tak lecą (domyślna kropka SL).
 
 ```bash
-# from repo (requires Pillow)
-python3 -c "print('see agent script or re-run generation')"
+python3 examples/secondlife/textures/make_orbs.py
+python3 examples/secondlife/textures/make_particles.py
 ```
-
-Source generator can be re-run from the project tooling; files live next to this README.

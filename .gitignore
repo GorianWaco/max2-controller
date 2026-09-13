@@ -24,6 +24,9 @@ __pycache__/
 venv/
 dist/
 build/
+.flatpak-builder/
+flatpak/build/
+flatpak/repo/
 target/
 .next/
 .cache/

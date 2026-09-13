@@ -92,6 +92,7 @@ class Max2GtkApp(_AppBase):
         self.win: Gtk.ApplicationWindow | None = None
         self._audio_level_idle = False
         self._internet_tunnel = None  # max2_controller.internet_share.InternetTunnel
+        self._sl_bridge = None  # max2_controller.secondlife.bridge.SlObjectBridge
 
     # Kategorie lewego paska: (id, etykieta)
     _NAV_PAGES: tuple[tuple[str, str], ...] = (
@@ -651,9 +652,109 @@ class Max2GtkApp(_AppBase):
         pump_row.append(self.audio_pump_sw)
         sec.append(pump_row)
 
+        bands_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bands_row.append(
+            Gtk.Label(label="Podział na bas i treble", hexpand=True, xalign=0)
+        )
+        self.audio_bands_sw = Gtk.Switch()
+        self.audio_bands_sw.set_active(bool(self.config.audio_bands_enabled))
+        self.audio_bands_sw.connect("notify::active", self._on_audio_bands_sw)
+        bands_row.append(self.audio_bands_sw)
+        sec.append(bands_row)
+
+        self._bands_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        route_hint = Gtk.Label(
+            label="Każde pasmo: wibracje i/lub pump (2. funkcja). Oba na raz = głośniejsze wygrywa.",
+            wrap=True,
+            xalign=0,
+        )
+        route_hint.add_css_class("dim-label")
+        self._bands_box.append(route_hint)
+        self.bass_vib_sw = None
+        self.bass_pump_sw = None
+        self.treble_vib_sw = None
+        self.treble_pump_sw = None
+        self._bands_box.append(Gtk.Label(label="Bas (kick)", xalign=0))
+        row, self.bass_vib_sw = self._audio_route_row(
+            "Wibracje od basu", "audio_bass_to_vibrate"
+        )
+        self._bands_box.append(row)
+        row, self.bass_pump_sw = self._audio_route_row(
+            "Pump od basu", "audio_bass_to_pump"
+        )
+        self._bands_box.append(row)
+        self._bands_box.append(Gtk.Label(label="Treble (hi-hat)", xalign=0))
+        row, self.treble_vib_sw = self._audio_route_row(
+            "Wibracje od treble", "audio_treble_to_vibrate"
+        )
+        self._bands_box.append(row)
+        row, self.treble_pump_sw = self._audio_route_row(
+            "Pump od treble", "audio_treble_to_pump"
+        )
+        self._bands_box.append(row)
+
+        bass_g_lbl = Gtk.Label(
+            label=f"Wzmocnienie basu: {self.config.audio_bass_gain:.1f}", xalign=0
+        )
+        self.bass_gain_lbl = bass_g_lbl
+        self.bass_gain_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.2, 4.0, 0.1)
+        self.bass_gain_scale.set_value(self.config.audio_bass_gain)
+        self.bass_gain_scale.set_draw_value(False)
+        self.bass_gain_scale.connect(
+            "value-changed",
+            lambda s: (
+                setattr(self.config, "audio_bass_gain", float(s.get_value())),
+                self.bass_gain_lbl.set_text(f"Wzmocnienie basu: {s.get_value():.1f}"),
+            ),
+        )
+        self._bands_box.append(bass_g_lbl)
+        self._bands_box.append(self.bass_gain_scale)
+
+        treble_g_lbl = Gtk.Label(
+            label=f"Wzmocnienie treble: {self.config.audio_treble_gain:.1f}", xalign=0
+        )
+        self.treble_gain_lbl = treble_g_lbl
+        self.treble_gain_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.2, 6.0, 0.1)
+        self.treble_gain_scale.set_value(self.config.audio_treble_gain)
+        self.treble_gain_scale.set_draw_value(False)
+        self.treble_gain_scale.connect(
+            "value-changed",
+            lambda s: (
+                setattr(self.config, "audio_treble_gain", float(s.get_value())),
+                self.treble_gain_lbl.set_text(f"Wzmocnienie treble: {s.get_value():.1f}"),
+            ),
+        )
+        self._bands_box.append(treble_g_lbl)
+        self._bands_box.append(self.treble_gain_scale)
+
+        bass_hz_lbl = Gtk.Label(
+            label=f"Bas do: {int(self.config.audio_bass_hz)} Hz (kick, bęben)", xalign=0
+        )
+        self.bass_hz_lbl = bass_hz_lbl
+        self.bass_hz_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 80, 500, 10)
+        self.bass_hz_scale.set_value(self.config.audio_bass_hz)
+        self.bass_hz_scale.set_draw_value(False)
+        self.bass_hz_scale.connect("value-changed", self._on_bass_hz)
+        self._bands_box.append(bass_hz_lbl)
+        self._bands_box.append(self.bass_hz_scale)
+
+        treble_hz_lbl = Gtk.Label(
+            label=f"Treble od: {int(self.config.audio_treble_hz)} Hz (hi-hat, blask)", xalign=0
+        )
+        self.treble_hz_lbl = treble_hz_lbl
+        self.treble_hz_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1200, 8000, 100)
+        self.treble_hz_scale.set_value(self.config.audio_treble_hz)
+        self.treble_hz_scale.set_draw_value(False)
+        self.treble_hz_scale.connect("value-changed", self._on_treble_hz)
+        self._bands_box.append(treble_hz_lbl)
+        self._bands_box.append(self.treble_hz_scale)
+        self._bands_box.set_visible(bool(self.config.audio_bands_enabled))
+        sec.append(self._bands_box)
+
         audio_hint = Gtk.Label(
             label=(
                 "„Aplikacje” = dźwięk z Firefoxa/gier (monitor głośników), NIE mikrofon.\n"
+                "Bas/treble: włączniki „od basu / od treble” decydują, co rusza wibracje i pump.\n"
                 "Wybierz to samo wyjście co w systemie (u Ciebie: Scarlett). "
                 "Firefox musi grać na to wyjście. Połącz BLE, potem włącz. "
                 "Skrót: Ctrl+Shift+A."
@@ -725,7 +826,81 @@ class Max2GtkApp(_AppBase):
         self.game_info = Gtk.Label(label="", wrap=True, xalign=0, selectable=True)
         sec.append(self.game_info)
 
-        # --- Zdalne: panel partnerki + skrypt SL ---
+        # --- Second Life: PC odpytuje obiekt (bez tunelu) ---
+        sec = self._section(pages["zdalne"], "Second Life — obiekt na awatarze")
+        sec.append(
+            Gtk.Label(
+                label="Bez Cloudflare i bez tunelu: obiekt w SL dostaje swój URL, wklejasz go tutaj.",
+                wrap=True,
+                xalign=0,
+            )
+        )
+        sl_copy_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        copy_lsl = Gtk.Button(label="1. Kopiuj skrypt SL")
+        copy_lsl.add_css_class("suggested-action")
+        copy_lsl.connect("clicked", lambda *_: self._copy_sl_script())
+        sl_copy_row.append(copy_lsl)
+        copy_needs = Gtk.Button(label="Kopiuj skrypt potrzeb")
+        copy_needs.connect("clicked", lambda *_: self._copy_sl_script("LovenseNeedsHUD.lsl"))
+        sl_copy_row.append(copy_needs)
+        copy_tip = Gtk.Button(label="Kopiuj skrypt tip jara")
+        copy_tip.connect("clicked", lambda *_: self._copy_sl_script("LovenseTipJar.lsl"))
+        sl_copy_row.append(copy_tip)
+        copy_look = Gtk.Button(label="Kopiuj skrypt wyglądu")
+        copy_look.connect("clicked", lambda *_: self._copy_sl_script("LovenseLook.lsl"))
+        sl_copy_row.append(copy_look)
+        copy_host = Gtk.Button(label="Kopiuj host jara")
+        copy_host.connect("clicked", lambda *_: self._copy_sl_script("LovenseJarHost.lsl"))
+        sl_copy_row.append(copy_host)
+        copy_en = Gtk.Button(label="Kopiuj energię")
+        copy_en.connect("clicked", lambda *_: self._copy_sl_script("LovenseEnergy.lsl"))
+        sl_copy_row.append(copy_en)
+        sec.append(sl_copy_row)
+        sec.append(
+            Gtk.Label(
+                label="W SL: wklej skrypt kuli do Glass (root). Kolejne skrypty w tym samym Glass: wygląd, host jara, energia. Klik kuli → URL — wklej PAIR URL tutaj. Z Pink/Cyan/Core usuń wszystkie skrypty. Potrzeby = kolejny skrypt w Glass. Tip jar: kopia naczynia LovenseTipJar w Contents Glass. Klik kuli → Rez jar. Lewy klik naczynia = Pay.",
+                wrap=True,
+                xalign=0,
+            )
+        )
+        sec.append(Gtk.Label(label="2. Wklej PAIR URL (w SL: klik kuli → URL):", xalign=0))
+        sl_url_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.sl_object_url_entry = Gtk.Entry()
+        self.sl_object_url_entry.set_placeholder_text("https://sim….agni.lindenlab.com:12043/cap/…")
+        self.sl_object_url_entry.set_hexpand(True)
+        if getattr(self.config, "sl_object_url", ""):
+            self.sl_object_url_entry.set_text(self.config.sl_object_url)
+        sl_url_row.append(self.sl_object_url_entry)
+        sl_go = Gtk.Button(label="Połącz")
+        sl_go.connect("clicked", lambda *_: self._connect_sl_object())
+        sl_url_row.append(sl_go)
+        sec.append(sl_url_row)
+        self.sl_bridge_lbl = Gtk.Label(label="Niepołączone z obiektem SL", wrap=True, xalign=0)
+        sec.append(self.sl_bridge_lbl)
+        sec.append(
+            Gtk.Label(
+                label="Gdy zabawka jest offline, kliknięcia z SL ładują energię. Po połączeniu: Odtwórz kolejkę.",
+                wrap=True,
+                xalign=0,
+            )
+        )
+        self.energy_lbl = Gtk.Label(label="Energia: 0%  ·  kolejka 0", xalign=0)
+        sec.append(self.energy_lbl)
+        self.energy_bar = Gtk.ProgressBar()
+        self.energy_bar.set_fraction(0.0)
+        self.energy_bar.set_show_text(True)
+        self.energy_bar.set_text("0%")
+        sec.append(self.energy_bar)
+        en_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        en_play = Gtk.Button(label="Odtwórz kolejkę")
+        en_play.connect("clicked", lambda *_: self.controller.replay_charge())
+        en_row.append(en_play)
+        en_clear = Gtk.Button(label="Wyczyść energię")
+        en_clear.connect("clicked", lambda *_: self.controller.clear_charge())
+        en_row.append(en_clear)
+        sec.append(en_row)
+
+        # --- Zdalne: panel partnerki (przeglądarka, osobny tunel) ---
         sec = self._section(pages["zdalne"], "Zdalne sterowanie")
         rem_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         rem_row.append(
@@ -738,6 +913,39 @@ class Max2GtkApp(_AppBase):
 
         self.remote_status_lbl = Gtk.Label(label="Wyłączone", wrap=True, xalign=0)
         sec.append(self.remote_status_lbl)
+
+        tun_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        tun_row.append(Gtk.Label(label="Tunel internetowy", hexpand=True, xalign=0))
+        self.tunnel_mode_dd = Gtk.DropDown.new_from_strings(
+            [
+                "Cloudflare Quick (przeglądarka OK, SL często NIE)",
+                "Cloudflare Named",
+                "Cloudflare Token",
+                "ngrok (dobry do SL)",
+                "Tailscale Funnel",
+                "SSH localhost.run (do SL, bez konta)",
+            ]
+        )
+        mode_idx = {
+            "quick": 0,
+            "named": 1,
+            "token": 2,
+            "ngrok": 3,
+            "funnel": 4,
+            "ssh": 5,
+        }.get((self.config.tunnel_mode or "quick").lower(), 0)
+        self.tunnel_mode_dd.set_selected(mode_idx)
+        self.tunnel_mode_dd.set_hexpand(True)
+        self.tunnel_mode_dd.connect("notify::selected", self._on_tunnel_mode_dd)
+        tun_row.append(self.tunnel_mode_dd)
+        sec.append(tun_row)
+        sec.append(
+            Gtk.Label(
+                label="Obiekt w Second Life nie używa przeglądarki — Quick Cloudflare go zwykle blokuje. Wybierz SSH albo ngrok, włącz udostępnianie ponownie, potem Kopiuj skrypt SL.",
+                wrap=True,
+                xalign=0,
+            )
+        )
 
         sec.append(Gtk.Label(label="Adres dla partnerki (przeglądarka):", xalign=0))
         url_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -753,9 +961,12 @@ class Max2GtkApp(_AppBase):
         sec.append(url_row)
 
         sl_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        copy_lsl = Gtk.Button(label="Kopiuj skrypt LSL")
+        copy_lsl = Gtk.Button(label="Kopiuj skrypt SL")
         copy_lsl.connect("clicked", lambda *_: self._copy_sl_script())
         sl_btns.append(copy_lsl)
+        copy_look2 = Gtk.Button(label="Kopiuj skrypt wyglądu")
+        copy_look2.connect("clicked", lambda *_: self._copy_sl_script("LovenseLook.lsl"))
+        sl_btns.append(copy_look2)
         copy_note = Gtk.Button(label="Kopiuj notatkę (token + URL)")
         copy_note.connect("clicked", lambda *_: self._copy_sl_notecard())
         sl_btns.append(copy_note)
@@ -763,8 +974,8 @@ class Max2GtkApp(_AppBase):
 
         self.sl_info = Gtk.Label(
             label=(
-                "Włącz przełącznik. Partnerka otwiera adres w przeglądarce.\n"
-                "W SL: skrypt wklej do HUD, notatkę wrzuć jako lovense.cfg."
+                "Poniższy tunel jest tylko do panelu w przeglądarce (telefon partnerki).\n"
+                "Obiekt w Second Life łączy się osobno — pole PAIR URL powyżej."
             ),
             wrap=True,
             xalign=0,
@@ -858,6 +1069,8 @@ class Max2GtkApp(_AppBase):
                 "Brak Bluetooth w tym PC. Użyj Lovense Remote na telefonie (Game Mode)."
             )
         self.controller.start_battery_poll()
+        if (getattr(self.config, "sl_object_url", "") or "").strip():
+            GLib.timeout_add(600, lambda: (self._connect_sl_object() or False))
         if self.config.game_api_enabled:
             # set_active wywoła _on_game_sw → start (jeśli jeszcze nie)
             if not self.game_sw.get_active():
@@ -1667,6 +1880,16 @@ class Max2GtkApp(_AppBase):
             self.config.audio_sensitivity = float(self.sens_scale.get_value())
             self.config.audio_gain = float(self.gain_scale.get_value())
             self.config.audio_pump_enabled = self.audio_pump_sw.get_active()
+            self.config.audio_bands_enabled = self.audio_bands_sw.get_active()
+            self.config.audio_bass_gain = float(self.bass_gain_scale.get_value())
+            self.config.audio_treble_gain = float(self.treble_gain_scale.get_value())
+            self.config.audio_bass_hz = float(self.bass_hz_scale.get_value())
+            self.config.audio_treble_hz = float(self.treble_hz_scale.get_value())
+            if self.bass_vib_sw is not None:
+                self.config.audio_bass_to_vibrate = self.bass_vib_sw.get_active()
+                self.config.audio_bass_to_pump = self.bass_pump_sw.get_active()
+                self.config.audio_treble_to_vibrate = self.treble_vib_sw.get_active()
+                self.config.audio_treble_to_pump = self.treble_pump_sw.get_active()
             self.config.save()
             ok, msg = self.audio.start()
             if not ok:
@@ -1706,6 +1929,55 @@ class Max2GtkApp(_AppBase):
 
         self._ui(flip)
 
+    def _audio_route_row(self, label: str, attr: str) -> tuple[Gtk.Box, Gtk.Switch]:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.append(Gtk.Label(label=label, hexpand=True, xalign=0))
+        sw = Gtk.Switch()
+        sw.set_active(bool(getattr(self.config, attr, False)))
+
+        def _on(*_a) -> None:
+            setattr(self.config, attr, bool(sw.get_active()))
+            try:
+                self.config.save()
+            except Exception:
+                pass
+
+        sw.connect("notify::active", _on)
+        row.append(sw)
+        return row, sw
+
+    def _sync_route_sw(self, sw: Gtk.Switch | None, attr: str, default: bool) -> None:
+        if sw is None:
+            return
+        want = bool(getattr(self.config, attr, default))
+        if sw.get_active() != want:
+            sw.set_active(want)
+
+    def _on_audio_bands_sw(self, *_args) -> None:
+        on = bool(self.audio_bands_sw.get_active())
+        self.config.audio_bands_enabled = on
+        if hasattr(self, "_bands_box"):
+            self._bands_box.set_visible(on)
+        try:
+            self.config.save()
+        except Exception:
+            pass
+
+    def _on_bass_hz(self, scale: Gtk.Scale) -> None:
+        hz = float(scale.get_value())
+        self.config.audio_bass_hz = hz
+        self.bass_hz_lbl.set_text(f"Bas do: {int(hz)} Hz (kick, bęben)")
+
+    def _on_treble_hz(self, scale: Gtk.Scale) -> None:
+        hz = float(scale.get_value())
+        self.config.audio_treble_hz = hz
+        self.treble_hz_lbl.set_text(f"Treble od: {int(hz)} Hz (hi-hat, blask)")
+
+    @staticmethod
+    def _level_bar(x: float, n: int = 8) -> str:
+        k = int(min(n, max(0, round(float(x) * n))))
+        return "█" * k + "░" * (n - k)
+
     def _on_audio_level(self, rms: float, vibrate: int, pump: int) -> None:
         # throttle UI updates
         if self._audio_level_idle:
@@ -1714,17 +1986,23 @@ class Max2GtkApp(_AppBase):
 
         def upd():
             self._audio_level_idle = False
-            bar = int(min(20, max(0, rms * 40)))
-            self.audio_level_lbl.set_text(
-                f"Poziom: {'█' * bar}{'░' * (20 - bar)}  → V={vibrate} P={pump}"
-            )
+            if bool(getattr(self.config, "audio_bands_enabled", False)):
+                b = float(getattr(self.audio, "last_bass", 0.0) or 0.0)
+                t = float(getattr(self.audio, "last_treble", 0.0) or 0.0)
+                self.audio_level_lbl.set_text(
+                    f"Bas {self._level_bar(b)}  Treble {self._level_bar(t)}  → V={vibrate} P={pump}"
+                )
+            else:
+                bar = int(min(20, max(0, rms * 40)))
+                self.audio_level_lbl.set_text(
+                    f"Poziom: {'█' * bar}{'░' * (20 - bar)}  → V={vibrate} P={pump}"
+                )
             # suwaki podążają za audio
             self._updating_sliders = True
             try:
                 self.vib_scale.set_value(vibrate)
                 self.pump_scale.set_value(pump)
-                self.vib_lbl.set_text(f"Vibrate: {vibrate} / 20")
-                self.pump_lbl.set_text(f"Pump: {pump} / 3")
+                self._update_secondary_slider()
             finally:
                 self._updating_sliders = False
 
@@ -1816,9 +2094,10 @@ class Max2GtkApp(_AppBase):
         if hasattr(self, "internet_link_entry"):
             internet = panel_base_from_link(self.internet_link_entry.get_text() or "")
         links = self._remote_links()
+        # żywy tunel zawsze przed starym trycloudflare z pola / configu
         base, _pub = pick_sl_base_url(
-            field,
             live,
+            field,
             self.config.tunnel_public_url or "",
             internet,
             lan_fallback=links.sl_base_lan,
@@ -1845,18 +2124,18 @@ class Max2GtkApp(_AppBase):
         )
         if not active:
             self.sl_info.set_text(
-                "Włącz przełącznik. Partnerka otwiera adres w przeglądarce.\n"
-                "W SL: skrypt wklej do HUD, notatkę wrzuć jako lovense.cfg."
+                "Tunel jest tylko do panelu w przeglądarce. "
+                "Obiekt SL nie potrzebuje tunelu — wklej PAIR URL powyżej."
             )
         elif is_public_https_url(base):
             self.sl_info.set_text(
-                "Adres wyślij partnerce. W SL: skrypt → Contents HUD, "
-                "notatka → lovense.cfg (token + URL już w środku)."
+                "Panel przeglądarki: wyślij adres partnerce. "
+                "Obiekt SL: osobny PAIR URL z czatu (powyżej)."
             )
         else:
             self.sl_info.set_text(
-                "Czekam na publiczny adres internetowy… "
-                "Potem skopiuj skrypt i notatkę (LAN nie zadziała z gridu SL)."
+                "Panel przeglądarki czeka na publiczny adres. "
+                "Obiekt SL działa bez tego — wklej PAIR URL powyżej."
             )
 
     def _alert(self, title: str, detail: str) -> None:
@@ -1907,29 +2186,63 @@ class Max2GtkApp(_AppBase):
         self._clipboard_set(url)
         self.controller.log(f"Skopiowano adres partnerki: {url}")
 
-    def _copy_sl_script(self) -> None:
-        from max2_controller.remote_links import is_public_https_url
+    def _connect_sl_object(self) -> None:
+        from max2_controller.secondlife.bridge import SlObjectBridge, normalize_sl_url
+
+        raw = ""
+        if hasattr(self, "sl_object_url_entry"):
+            raw = self.sl_object_url_entry.get_text() or ""
+        url = normalize_sl_url(raw)
+        if not url:
+            self.controller.log("Wklej PAIR URL z czatu obiektu w SL")
+            return
+        self.config.sl_object_url = url
+        try:
+            self.config.save()
+        except Exception:
+            pass
+        if self._sl_bridge is None:
+            self._sl_bridge = SlObjectBridge(self.controller)
+        if not self._sl_bridge.start(url):
+            if hasattr(self, "sl_bridge_lbl"):
+                self.sl_bridge_lbl.set_text(self._sl_bridge.last_error or "Nie połączono")
+            return
+        if hasattr(self, "sl_bridge_lbl"):
+            self.sl_bridge_lbl.set_text("Łączę z obiektem SL…")
+        self.controller.log("SL: zapisano PAIR URL — odpytuję obiekt")
+        GLib.timeout_add(1500, self._refresh_sl_bridge_lbl)
+
+    def _refresh_sl_bridge_lbl(self) -> bool:
+        br = getattr(self, "_sl_bridge", None)
+        if not hasattr(self, "sl_bridge_lbl"):
+            return False
+        if not br or not br.running:
+            self.sl_bridge_lbl.set_text("Niepołączone z obiektem SL")
+            return False
+        if br.ok:
+            self.sl_bridge_lbl.set_text("Połączone z obiektem SL — klik paska steruje zabawką")
+        else:
+            err = br.last_error or "czekam…"
+            self.sl_bridge_lbl.set_text(f"Szukam obiektu… {err}")
+        return True
+
+    def _copy_sl_script(self, template: str = "LovenseController.lsl") -> None:
         from max2_controller.secondlife import load_lsl_template
 
-        if not self.remote_sw.get_active():
-            self.remote_sw.set_active(True)
-        base = self._sl_base_url()
-        if not is_public_https_url(base):
-            self.controller.log(
-                "Brak publicznego HTTPS — poczekaj aż pojawi się adres, potem skopiuj skrypt ponownie."
-            )
-        script = load_lsl_template(base_url=base, token=self.config.remote_token)
+        script = load_lsl_template(token=self.config.remote_token, name=template)
         self._clipboard_set(script)
-        # też zapisz obok configu — wygodne wklejenie z pliku
         try:
             from max2_controller.config import CONFIG_DIR
 
-            out = CONFIG_DIR / "LovenseController.lsl"
+            out = CONFIG_DIR / template
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             out.write_text(script, encoding="utf-8")
-            self.controller.log(f"Skrypt LSL w schowku + zapis: {out}")
+            self.controller.log(f"Skrypt LSL ({template}) w schowku + zapis: {out}")
         except Exception:
-            self.controller.log("Skrypt LSL skopiowany do schowka")
+            self.controller.log(f"Skrypt LSL ({template}) skopiowany do schowka")
+
+    def _copy_sl_meter(self) -> None:
+        self._copy_sl_script("LovenseController.lsl")
 
     def _copy_sl_notecard(self) -> None:
         """Notecard lovense.cfg — wrzuć do obiektu w SL zamiast edytować skrypt."""
@@ -2579,47 +2892,52 @@ class Max2GtkApp(_AppBase):
 
         self._set_internet_busy(False)
         base = public_base.rstrip("/")
-        # zapisz stały URL (named/token) albo ostatni quick
-        self.config.tunnel_public_url = base
-        try:
-            self.config.save()
-        except Exception:
-            pass
         panel = build_public_panel_link(base, self.config.remote_token)
         if hasattr(self, "internet_link_entry"):
-            self.internet_link_entry.set_text(panel)
-        mode = self._tunnel_mode_str()
-        stable = "STAŁY" if mode in ("named", "token") else "tymczasowy"
+            self.internet_link_entry.set_text("Czekam aż DNS zacznie działać…")
         if hasattr(self, "internet_status_lbl"):
             self.internet_status_lbl.set_text("Czekam aż adres zacznie działać (DNS)…")
-        if hasattr(self, "sl_tunnel_entry"):
-            self.sl_tunnel_entry.set_text(base)
-            self._update_sl_ui()
-        self.controller.log(f"Adres tunelu: {panel} — czekam aż DNS i /health będą żywe…")
         if hasattr(self, "remote_status_lbl"):
             self.remote_status_lbl.set_text("Czekam aż adres zacznie działać (DNS)…")
+        self.controller.log(f"Nowy hostname tunelu — nie otwieraj starego linku. Czekam na /health…")
         token = self.config.remote_token
 
         def probe():
             from max2_controller.internet_share import probe_sl_http, wait_public_http
 
-            ok, msg = wait_public_http(base, timeout=50.0)
+            ok, msg = wait_public_http(base, timeout=55.0)
             if ok:
-                self.controller.log(f"Adres partnerki gotowy: {panel}")
-                self._ui(lambda: self._clipboard_set(panel))
-                self._ui(self._update_remote_link_ui)
+                self.config.tunnel_public_url = base
+                try:
+                    self.config.save()
+                except Exception:
+                    pass
+                self.controller.log(f"Adres partnerki gotowy (tylko ten, stary trycloudflare jest martwy): {panel}")
+
+                def apply_ok():
+                    if hasattr(self, "internet_link_entry"):
+                        self.internet_link_entry.set_text(panel)
+                    if hasattr(self, "sl_tunnel_entry"):
+                        self.sl_tunnel_entry.set_text(base)
+                    self._clipboard_set(panel)
+                    self._update_remote_link_ui()
+
+                self._ui(apply_ok)
             else:
                 self.controller.log(
                     f"Adres jeszcze nie odpowiada ({msg}). "
-                    "Odśwież za chwilę albo wyłącz i włącz udostępnianie."
+                    "Nie kopiuj starego linku z przeglądarki — wyłącz i włącz udostępnianie."
                 )
-                self._ui(
-                    lambda: self.remote_status_lbl.set_text(
-                        "Adres jeszcze nieosiągalny — odśwież za 15 s"
-                    )
-                    if hasattr(self, "remote_status_lbl")
-                    else None
-                )
+
+                def apply_fail():
+                    if hasattr(self, "internet_link_entry"):
+                        self.internet_link_entry.set_text("")
+                    if hasattr(self, "remote_status_lbl"):
+                        self.remote_status_lbl.set_text(
+                            "Adres jeszcze nieosiągalny — odśwież za 15 s"
+                        )
+
+                self._ui(apply_fail)
             result = probe_sl_http(base, token)
             if result.get("sl_blocked"):
                 self.controller.log(
@@ -2841,6 +3159,39 @@ class Max2GtkApp(_AppBase):
                 if abs(self.gain_scale.get_value() - g) > 0.05:
                     self.gain_scale.set_value(g)
                     self.gain_lbl.set_text(f"Wzmocnienie: {g:.1f}")
+            if hasattr(self, "audio_bands_sw"):
+                want = bool(self.config.audio_bands_enabled)
+                if self.audio_bands_sw.get_active() != want:
+                    self.audio_bands_sw.set_active(want)
+            self._sync_route_sw(getattr(self, "bass_vib_sw", None), "audio_bass_to_vibrate", True)
+            self._sync_route_sw(getattr(self, "bass_pump_sw", None), "audio_bass_to_pump", False)
+            self._sync_route_sw(
+                getattr(self, "treble_vib_sw", None), "audio_treble_to_vibrate", False
+            )
+            self._sync_route_sw(
+                getattr(self, "treble_pump_sw", None), "audio_treble_to_pump", True
+            )
+            if hasattr(self, "bass_gain_scale") and hasattr(self, "bass_gain_lbl"):
+                bg = float(self.config.audio_bass_gain)
+                if abs(self.bass_gain_scale.get_value() - bg) > 0.05:
+                    self.bass_gain_scale.set_value(bg)
+                    self.bass_gain_lbl.set_text(f"Wzmocnienie basu: {bg:.1f}")
+            if hasattr(self, "treble_gain_scale") and hasattr(self, "treble_gain_lbl"):
+                tg = float(self.config.audio_treble_gain)
+                if abs(self.treble_gain_scale.get_value() - tg) > 0.05:
+                    self.treble_gain_scale.set_value(tg)
+                    self.treble_gain_lbl.set_text(f"Wzmocnienie treble: {tg:.1f}")
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "energy_bar"):
+                snap = self.controller.snapshot()
+                e = int(snap.get("energy") or 0)
+                b = int(snap.get("bank") or 0)
+                play = "  ·  odtwarzam" if snap.get("energy_playing") else ""
+                self.energy_lbl.set_text(f"Energia: {e}%  ·  kolejka {b}{play}")
+                self.energy_bar.set_fraction(max(0.0, min(1.0, e / 100.0)))
+                self.energy_bar.set_text(f"{e}%")
         except Exception:
             pass
         toy = self.controller.selected_toy()

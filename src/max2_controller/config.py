@@ -77,6 +77,9 @@ class AppConfig:
     tunnel_id: str = ""  # UUID named tunnel (po create)
     tunnel_auto_start: bool = False  # start tunnel przy włączaniu panelu remote
 
+    # Second Life: URL z llRequestSecureURL (PC odpytuje obiekt, bez tunelu)
+    sl_object_url: str = ""
+
     # Hotkeys
     hotkeys_enabled: bool = True
     # Proste klawisze globalnie (0-9, spacja, …) — wygodne w grze, ostrożnie w pracy
@@ -122,6 +125,17 @@ class AppConfig:
     audio_max_vibrate: int = 20
     audio_max_pump: int = 2
     audio_pump_enabled: bool = True
+    # Bas → wibracje, treble → pump / rotate / silnik 2
+    audio_bands_enabled: bool = True
+    audio_bass_hz: float = 250.0  # pasmo basu: 20 Hz … to
+    audio_treble_hz: float = 2000.0  # pasmo treble: to … Nyquist
+    audio_bass_gain: float = 1.0
+    audio_treble_gain: float = 1.8  # hi-hat jest cichszy w RMS niż kick
+    # dokąd idzie pasmo (max, gdy oba włączone na ten sam suwak)
+    audio_bass_to_vibrate: bool = True
+    audio_bass_to_pump: bool = False
+    audio_treble_to_vibrate: bool = False
+    audio_treble_to_pump: bool = True
 
     # Polling baterii (s)
     battery_poll_sec: float = 15.0
@@ -245,6 +259,12 @@ class AppConfig:
         # Usuń stare pola jeśli wcisnęły się przez pomyłkę (nie są w dataclass)
         # clamp sensownych wartości
         cfg = cls(**{k: v for k, v in filtered.items() if k in known})
+        cfg.audio_bass_hz = max(40.0, min(600.0, float(cfg.audio_bass_hz or 250.0)))
+        cfg.audio_treble_hz = max(800.0, min(12000.0, float(cfg.audio_treble_hz or 2000.0)))
+        if cfg.audio_treble_hz < cfg.audio_bass_hz + 200.0:
+            cfg.audio_treble_hz = cfg.audio_bass_hz + 400.0
+        cfg.audio_bass_gain = max(0.2, min(4.0, float(cfg.audio_bass_gain or 1.0)))
+        cfg.audio_treble_gain = max(0.2, min(6.0, float(cfg.audio_treble_gain or 1.8)))
         cfg.control_max_vibrate = max(1, min(20, int(cfg.control_max_vibrate)))
         cfg.control_max_pump = max(0, min(20, int(cfg.control_max_pump)))
         cfg.control_step_vibrate = max(1, min(10, int(cfg.control_step_vibrate)))

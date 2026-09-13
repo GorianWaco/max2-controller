@@ -1,8 +1,10 @@
-# Notecard w SL: nazwa dokładnie "lovense.cfg" (w Contents obiektu HUD)
+# Optional. Name must be exactly lovense.cfg
 
-BASE_URL=https://xxxx.trycloudflare.com
-TOKEN=wklej_token_z_gui
-CHANNEL=7
+TOKEN=PASTE_TOKEN_FROM_GUI
 DEFAULT_TIME=4
-# 38 = ATTACH_HUD_BOTTOM_RIGHT
-HUD=38
+ATTACH=2
+PUBLIC=1
+# hover over the bar; \\n = new line; empty = default
+HOVER=✦  Lovense
+# hover color: r g b  0-1 or 0-255
+COLOR=1.00 0.82 0.90

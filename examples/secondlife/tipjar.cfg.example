@@ -1,0 +1,13 @@
+# Optional. Name must be exactly tipjar.cfg
+# Rez the vessel on the floor. Wear is not supported.
+
+TITLE=Tip jar
+THANKS=Thanks {name}! L${amount} -> {time}s
+OPEN=1
+SHOW=1
+
+PRICE_A=10
+PRICE_B=50
+PRICE_C=100
+PRICE_D=250
+PRICE_OTHER=25

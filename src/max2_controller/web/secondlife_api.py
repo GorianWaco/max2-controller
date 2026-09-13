@@ -72,7 +72,7 @@ Endpoints (GET or POST — LSL-friendly):
 Aliases: vibrate=level=v  pump=p  time=time_sec=t  intensity=i
 
 Limits: remote_max_vibrate / remote_max_pump from controller config.
-Script template: see GUI → Second Life → „Kopiuj skrypt LSL”
+Script template: GUI → Remote → “Kopiuj skrypt SL” (wearable, not HUD)
 """
 
 

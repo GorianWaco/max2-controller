@@ -1,0 +1,11 @@
+# Optional. Name must be exactly needs.cfg
+# Drop into the Needs HUD object.
+
+HUG_RANGE=1.5
+SOCIAL_RANGE=20
+HORNY_QUEUE=10
+HORNY_PER_MIN=12
+HYGIENE_DRAIN=0.8
+HYGIENE_WASH=80
+HUGS_PER_MIN=14
+SOCIAL_PER_PERSON=3

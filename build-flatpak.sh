@@ -8,46 +8,44 @@ APP_ID="pl.gorian.LovenseController"
 MANIFEST="flatpak/pl.gorian.LovenseController.yml"
 BUILD_DIR="flatpak/build"
 REPO_DIR="flatpak/repo"
-BUNDLE="dist/LovenseController.flatpak"
+VERSION=$(python3 -c "import pathlib,re; t=pathlib.Path('src/max2_controller/__init__.py').read_text(); print(re.search(r'__version__\\s*=\\s*\"([^\"]+)\"', t).group(1))" 2>/dev/null || echo "2.0.0")
+BUNDLE="dist/LovenseController-${VERSION}.flatpak"
 
 mkdir -p dist flatpak/build flatpak/repo
 
-need() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "Brak: $1"
-    echo "  Arch/CachyOS:  sudo pacman -S flatpak flatpak-builder"
-    exit 1
-  fi
-}
-
-need flatpak
-need flatpak-builder
-
-echo "==> Runtime GNOME (pobierze się przy pierwszym buildzie)"
-flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true
-flatpak install -y --user flathub org.gnome.Platform//48 org.gnome.Sdk//48 || \
-  flatpak install -y --user flathub org.gnome.Platform//47 org.gnome.Sdk//47 || \
-  flatpak install -y --user flathub org.gnome.Platform//46 org.gnome.Sdk//46 || true
-
-# Jeśli 48 nie ma — spróbuj dostosować manifest
-if ! flatpak info org.gnome.Platform//48 >/dev/null 2>&1; then
-  for ver in 47 46 45; do
-    if flatpak info "org.gnome.Platform//${ver}" >/dev/null 2>&1; then
-      echo "Używam runtime GNOME ${ver}"
-      sed -i "s/runtime-version: '48'/runtime-version: '${ver}'/" "$MANIFEST"
-      break
-    fi
-  done
+BUILDER=()
+if command -v flatpak-builder >/dev/null 2>&1; then
+  BUILDER=(flatpak-builder)
+elif flatpak info --user org.flatpak.Builder >/dev/null 2>&1 || flatpak info org.flatpak.Builder >/dev/null 2>&1; then
+  BUILDER=(
+    flatpak run
+    --filesystem=home
+    --share=network
+    --env=FLATPAK_USER_DIR="${HOME}/.local/share/flatpak"
+    --command=flatpak-builder
+    org.flatpak.Builder
+  )
+else
+  echo "Brak flatpak-builder."
+  echo "  sudo pacman -S flatpak-builder"
+  echo "  albo: flatpak install --user flathub org.flatpak.Builder"
+  exit 1
 fi
 
-echo "==> flatpak-builder"
-flatpak-builder --force-clean --user --install-deps-from=flathub \
+echo "==> Runtime GNOME 50"
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+flatpak install -y --user flathub org.gnome.Platform//50 org.gnome.Sdk//50 || true
+
+echo "==> flatpak-builder (${BUILDER[*]})"
+"${BUILDER[@]}" --force-clean --user --install-deps-from=flathub \
   --repo="$REPO_DIR" \
   "$BUILD_DIR" \
   "$MANIFEST"
 
 echo "==> bundle → $BUNDLE"
-flatpak build-bundle "$REPO_DIR" "$BUNDLE" "$APP_ID"
+flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+  "$REPO_DIR" "$BUNDLE" "$APP_ID"
+ln -sfn "$(basename "$BUNDLE")" dist/LovenseController.flatpak
 
 echo
 echo "OK. Instalacja u siebie lub u partnerki:"

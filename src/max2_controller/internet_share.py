@@ -748,7 +748,13 @@ def tailscale_status_summary() -> str:
 
 
 def flush_local_dns() -> None:
-    """Zdejmij ujemny cache NXDOMAIN (systemd-resolved trzyma go nawet 30 min)."""
+    """Flush NXDOMAIN cache only when already root.
+
+    `resolvectl flush-caches` wymaga polkit — w GUI wyskakiwało
+    „Authentication is required to flush DNS caches” i znikało po 3 s.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        return
     for cmd in (
         ["resolvectl", "flush-caches"],
         ["systemd-resolve", "--flush-caches"],
@@ -773,7 +779,8 @@ def wait_public_http(base_url: str, timeout: float = 50.0) -> tuple[bool, str]:
 
     cloudflared wypisuje URL zanim DNS trycloudflare jest widoczny.
     systemd-resolved zapamiętuje NXDOMAIN i przeglądarka pokazuje
-    „witryna nieosiągalna” przez wiele minut.
+    Error 1016 / „witryna nieosiągalna” przez wiele minut — i to na
+    *starym* hoście po restarcie tunelu.
     """
     from urllib.error import HTTPError, URLError
 
@@ -783,7 +790,6 @@ def wait_public_http(base_url: str, timeout: float = 50.0) -> tuple[bool, str]:
     if not base.startswith("http"):
         base = "https://" + base
     health = base + "/health"
-    flush_local_dns()
     deadline = time.time() + timeout
     last = "timeout"
     while time.time() < deadline:
@@ -804,9 +810,6 @@ def wait_public_http(base_url: str, timeout: float = 50.0) -> tuple[bool, str]:
             last = f"HTTP {e.code}"
         except URLError as e:
             last = str(e.reason or e)
-            low = last.lower()
-            if any(s in low for s in ("name or service", "nodename", "resolve", "temporary failure")):
-                flush_local_dns()
         except Exception as e:
             last = str(e)
         time.sleep(1.2)

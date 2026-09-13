@@ -27,7 +27,7 @@ Partnerka może użyć tego samego programu ze swoją zabawką (np. Lush) — te
 | Czas / STOP | + panic hotkey |
 | Presety / pattern | 8 presetów + własne + zapis ulubionych |
 | Bateria | odczyt + auto-poll |
-| Audio react | dźwięk z Firefoxa/gier lub mikrofon |
+| Audio react | dźwięk z Firefoxa/gier lub mikrofon; **bas → wibracje, treble → 2. funkcja** |
 | API do gier | lokalne HTTP JSON |
 | Hotkeys | **własne skróty w GUI** — chord + tryb gry |
 | Zdalne sterowanie | panel web z tokenem (dla partnera) |
@@ -61,28 +61,31 @@ Ręczny URL (gdy trzeba): `https://192-168-0-15.lovense.club:30010/command` (kro
 
 ## Instalacja
 
-### Szybko u siebie (bez Flatpaka)
+Jedna komenda (zalecane):
 
 ```bash
-# CachyOS / Arch
-sudo pacman -S python-gobject gtk4 libadwaita bluez gst-plugins-good
-
-cd ~/Projekty/max2-controller
-./install-local.sh
-lovense-controller
-# albo:
-./run.sh
+curl -fsSL https://raw.githubusercontent.com/GorianWaco/max2-controller/main/install.sh | bash
 ```
 
-### Flatpak (do wysłania partnerce)
+Flatpak z GitHub Releases (dla partnerki):
 
 ```bash
-sudo pacman -S flatpak flatpak-builder
+curl -fsSL https://raw.githubusercontent.com/GorianWaco/max2-controller/main/install.sh | bash -s -- --flatpak
+```
+
+### Ze źródeł
+
+```bash
+cd ~/Projekty/max2-controller
+./install.sh
+lovense-controller
+```
+
+### Zbuduj Flatpak
+
+```bash
 ./build-flatpak.sh
-# plik: dist/LovenseController.flatpak
-# u niej:
-flatpak install --user dist/LovenseController.flatpak
-flatpak run pl.gorian.LovenseController
+./install.sh --local dist/LovenseController.flatpak
 ```
 
 Szczegóły: [INSTALL-FOR-PARTNER.md](INSTALL-FOR-PARTNER.md)
@@ -106,6 +109,9 @@ Technicznie: GStreamer `pulsesrc` na `<sink>.monitor` (na Focusrite `pw-record` 
 4. Włącz przełącznik, puść dźwięk.
 5. W logu powinno być: `GStreamer → aplikacje/głośniki: ….monitor`.
 6. Dostosuj **Czułość** / **Wzmocnienie**.
+7. **Podział na bas i treble** (domyślnie WŁ): włączniki **wibracje / pump od basu** i **od treble**.
+   Domyślnie kick → Vibrate, hi-hat → Pump. Możesz dać bas też na pompę, treble na wibracje, albo oba naraz.
+   Osobne wzmocnienie basu i treble; „Bas do / Treble od” w Hz, gdy kick za słabo albo wokal za mocno wchodzi w bas.
 
 Skrót: `Ctrl+Shift+A` (lub `A` w trybie gry).
 
@@ -259,10 +265,14 @@ albo **Named tunnel** z wyłączonym Bot Fight.
 
 1. Włącz **panel web** w GUI (albo zostaw auto-start panelu + tunelu).
 2. **Udostępnij przez internet** — tryb ngrok / Funnel (nie samo LAN).
-3. Sekcja **Second Life** → **„Kopiuj skrypt LSL”** (wypełnia BASE_URL + TOKEN).
-   Zapisuje też `~/.config/max2-controller/LovenseController.lsl`.
-4. Wklej skrypt do HUD / collary wworld. Przycisk **Diagnostyka SL** sprawdza tunel
-   z User-Agent jak z gridu.
+3. Sekcja **Zdalne** → **„Kopiuj skrypt SL”**.
+4. W SL: box → wklej → Wear na głowę (cube sam staje się magicznym orbem). Klik kuli → **URL** → wklej PAIR URL w programie → **Połącz**.
+   Bez tunelu: to PC odpytuje obiekt. Klik kuli = menu. Gdy zabawka chodzi, orb tryska particle.
+5. Opcjonalnie **Kopiuj skrypt potrzeb** — wklej jako **drugi skrypt do tej samej kuli**.
+   Horny / Hygiene / Hugs / Social pojawią się nad głową. Token i stan zostają po zmianie sima.
+6. **Kopiuj skrypt tip jara** — wklej do naczynia `LovenseTipJar.dae`, weź kopię do Contents kuli (nazwa `LovenseTipJar`).
+   **Kopiuj host jara** — trzeci skrypt w Glass. Klik kuli → **Rez jar** = naczynie pod stopami. Lewy klik naczynia = Pay.
+   Offline zabawka: kliknięcia ładują **Energy**. Po połączeniu — **Odtwórz kolejkę**. Kolor hoveru: kula → Setup → Color.
 
 ### Endpointy (GET lub POST)
 

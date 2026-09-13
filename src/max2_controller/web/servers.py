@@ -11,11 +11,48 @@ from urllib.parse import quote
 from flask import Flask, Response, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from max2_controller.web.i18n import i18n_boot_script, lang_select_html
+
 if TYPE_CHECKING:
     from max2_controller.controller import Max2Controller
     from max2_controller.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _web_shell(body: str, *, title_key: str, extra_css: str = "") -> str:
+    """Prosta strona z wyborem języka (landing / błędy)."""
+    return f"""<!DOCTYPE html>
+<html lang="pl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title data-i18n="{title_key}">Lovense Controller</title>
+<style>
+body{{font-family:system-ui,sans-serif;background:#0f0f12;color:#f4f4f5;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
+.card{{background:#1a1a22;padding:2rem;border-radius:16px;max-width:440px;width:92%;box-shadow:0 8px 32px #0008;position:relative}}
+h1{{font-size:1.35rem;margin:0 0 .5rem}}
+p{{opacity:.8;font-size:.9rem;line-height:1.45}}
+a{{color:#f472b6}}
+input,button{{width:100%;padding:.8rem;margin:.45rem 0;border-radius:10px;border:1px solid #333;background:#222;color:#fff;font-size:1rem;box-sizing:border-box}}
+button{{background:#e11d48;border:none;cursor:pointer;font-weight:600}}
+button:hover{{background:#be123c}}
+.hint{{font-size:.8rem;opacity:.55;margin-top:1rem}}
+.lang-wrap{{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin:0 0 1rem}}
+.lang-lab{{font-size:.8rem;opacity:.7}}
+.lang-select{{flex:1;max-width:12rem;padding:.45rem .5rem;border-radius:10px;border:1px solid #333;background:#222;color:#fff;font-size:.9rem}}
+{extra_css}
+</style></head><body>
+{body}
+{i18n_boot_script()}
+<script>initI18n();</script>
+</body></html>"""
+
+
+def remote_panel_html() -> str:
+    html = REMOTE_PANEL_HTML
+    html = html.replace("<!--I18N_BOOT-->", i18n_boot_script())
+    html = html.replace("<!--LANG_SELECT_SIDE-->", lang_select_html(compact=True))
+    html = html.replace("<!--LANG_SELECT_JOIN-->", lang_select_html())
+    return html
 
 # katalog z remote.html — ustawiany przy starcie
 STATIC_DIR: str | None = None
@@ -356,44 +393,32 @@ def create_remote_app(controller: "Max2Controller", config: "AppConfig") -> Flas
 
     @app.get("/")
     def index():
-        html = """<!DOCTYPE html>
-<html lang="pl"><head><meta charset="utf-8"><title>Lovense Controller — Remote</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{font-family:system-ui,sans-serif;background:#0f0f12;color:#f4f4f5;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-.card{background:#1a1a22;padding:2rem;border-radius:16px;max-width:440px;width:92%;box-shadow:0 8px 32px #0008}
-h1{font-size:1.35rem;margin:0 0 .5rem}
-input,button{width:100%;padding:.8rem;margin:.45rem 0;border-radius:10px;border:1px solid #333;background:#222;color:#fff;font-size:1rem;box-sizing:border-box}
-button{background:#e11d48;border:none;cursor:pointer;font-weight:600}
-button:hover{background:#be123c}
-p{opacity:.8;font-size:.9rem;line-height:1.45}
-.hint{font-size:.8rem;opacity:.55;margin-top:1rem}
-</style></head><body><div class="card">
-<h1>Lovense Controller</h1>
-<p>Zdalne sterowanie w przeglądarce. Wklej <b>link z tokenem</b> od partnera albo sam token poniżej.</p>
-<input id="tok" type="text" placeholder="Token lub wklej cały link" autocomplete="off" spellcheck="false">
-<button onclick="go()">Otwórz panel</button>
-<p class="hint">Najwygodniej: otwórz gotowy link (…/r/TOKEN) — bez wpisywania tokenu.</p>
+        body = f"""<div class="card">
+{lang_select_html()}
+<h1 data-i18n="landing.h1">Lovense Controller</h1>
+<p data-i18n-html="landing.intro">Zdalne sterowanie w przeglądarce. Wklej <b>link z tokenem</b> od partnera albo sam token poniżej.</p>
+<input id="tok" type="text" data-i18n-placeholder="landing.placeholder" placeholder="Token lub wklej cały link" autocomplete="off" spellcheck="false">
+<button onclick="go()" data-i18n="landing.open">Otwórz panel</button>
+<p class="hint" data-i18n="landing.hint">Najwygodniej: otwórz gotowy link (…/r/TOKEN) — bez wpisywania tokenu.</p>
 </div>
 <script>
-function go(){
+function go(){{
   let t=document.getElementById('tok').value.trim();
   if(!t) return;
-  // jeśli wklejono cały URL z tokenem
-  try {
-    if(t.includes('://') || t.includes('/r/') || t.includes('token=')) {
+  try {{
+    if(t.includes('://') || t.includes('/r/') || t.includes('token=')) {{
       const u = t.includes('://') ? new URL(t) : new URL(t, location.origin);
       const m = u.pathname.match(/\\/r\\/([^/]+)/);
-      if(m) { location.href = '/r/' + decodeURIComponent(m[1]); return; }
+      if(m) {{ location.href = '/r/' + decodeURIComponent(m[1]); return; }}
       const tok = u.searchParams.get('token');
-      if(tok) { location.href = '/panel?token=' + encodeURIComponent(tok); return; }
-    }
-  } catch(e) {}
+      if(tok) {{ location.href = '/panel?token=' + encodeURIComponent(tok); return; }}
+    }}
+  }} catch(e) {{}}
   location.href = '/r/' + encodeURIComponent(t);
-}
-document.getElementById('tok').addEventListener('keydown',e=>{if(e.key==='Enter')go();});
-</script></body></html>"""
-        return Response(html, mimetype="text/html")
+}}
+document.getElementById('tok').addEventListener('keydown',e=>{{if(e.key==='Enter')go();}});
+</script>"""
+        return Response(_web_shell(body, title_key="landing.title"), mimetype="text/html")
 
     @app.get("/r/<path:token>")
     def panel_short(token: str):
@@ -402,10 +427,15 @@ document.getElementById('tok').addEventListener('keydown',e=>{if(e.key==='Enter'
 
         tok = _normalize_token(token)
         if not _tokens_equal(tok, str(config.remote_token)):
+            body = f"""<div class="card">
+{lang_select_html()}
+<h1 data-i18n="err.bad_link_title">Nieprawidłowy link</h1>
+<p data-i18n="err.bad_link_p1">Poproś o nowy link od właściciela.</p>
+<p data-i18n="err.bad_link_p2">Upewnij się, że skopiowano cały link (token na końcu).</p>
+<p><a href="/" data-i18n="err.back">Wróć</a></p>
+</div>"""
             return Response(
-                "<h1>Nieprawidłowy link</h1><p>Poproś o nowy link od właściciela.</p>"
-                "<p>Upewnij się, że skopiowano cały link (token na końcu).</p>"
-                "<p><a href='/'>Wróć</a></p>",
+                _web_shell(body, title_key="err.bad_link_title"),
                 status=401,
                 mimetype="text/html",
             )
@@ -415,19 +445,34 @@ document.getElementById('tok').addEventListener('keydown',e=>{if(e.key==='Enter'
     @app.get("/panel")
     def panel():
         if not _auth():
+            body = f"""<div class="card">
+{lang_select_html()}
+<h1 data-i18n="err.denied_title">Brak dostępu</h1>
+<p data-i18n="err.denied_p">Zły lub brakujący token. Użyj pełnego linku od właściciela.</p>
+<p><a href="/" data-i18n="err.back">Wróć</a></p>
+</div>"""
             return Response(
-                "<h1>Brak dostępu</h1><p>Zły lub brakujący token. "
-                "Użyj pełnego linku od właściciela.</p><p><a href='/'>Wróć</a></p>",
+                _web_shell(body, title_key="err.denied_title"),
                 status=401,
                 mimetype="text/html",
             )
-        return Response(REMOTE_PANEL_HTML, mimetype="text/html")
+        return Response(remote_panel_html(), mimetype="text/html")
 
     @app.get("/share")
     def share_page():
         """Strona do pokazania partnerce (link + QR) — wymaga tokenu."""
         if not _auth():
-            return Response("Brak dostępu — dodaj ?token=…", status=401, mimetype="text/plain")
+            body = f"""<div class="card">
+{lang_select_html()}
+<h1 data-i18n="err.denied_title">Brak dostępu</h1>
+<p data-i18n="err.share_denied">Brak dostępu — dodaj ?token=…</p>
+<p><a href="/" data-i18n="err.back">Wróć</a></p>
+</div>"""
+            return Response(
+                _web_shell(body, title_key="err.denied_title"),
+                status=401,
+                mimetype="text/html",
+            )
         tok = quote(str(config.remote_token), safe="")
         # ten sam host co w adresie (LAN / tunnel)
         host = request.host_url.rstrip("/")
@@ -437,25 +482,24 @@ document.getElementById('tok').addEventListener('keydown',e=>{if(e.key==='Enter'
             "https://api.qrserver.com/v1/create-qr-code/?size=240x240&data="
             + quote(link, safe="")
         )
-        html = f"""<!DOCTYPE html>
-<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Link dla partnerki</title>
-<style>
-body{{font-family:system-ui,sans-serif;background:#0b0b10;color:#fafafa;margin:0;padding:1.25rem;text-align:center}}
-.card{{max-width:420px;margin:0 auto;background:#16161f;border:1px solid #2a2a36;border-radius:16px;padding:1.25rem}}
-a{{color:#f472b6;word-break:break-all}}
-img{{background:#fff;border-radius:12px;padding:8px;margin:1rem 0}}
-code{{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-size:.78rem;word-break:break-all;margin:.5rem 0}}
-.hint{{color:#a1a1aa;font-size:.85rem;line-height:1.45;text-align:left}}
-</style></head><body><div class="card">
-<h1>Panel partnerski</h1>
-<p class="hint">Ta sama sieć Wi‑Fi co PC z zabawką. Nie używaj danych komórkowych.</p>
+        extra = """
+body{text-align:center;align-items:flex-start;padding:1.25rem}
+.card{max-width:420px;margin:0 auto;background:#16161f;border:1px solid #2a2a36}
+a{word-break:break-all}
+img{background:#fff;border-radius:12px;padding:8px;margin:1rem 0}
+code{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-size:.78rem;word-break:break-all;margin:.5rem 0}
+.hint{color:#a1a1aa;font-size:.85rem;line-height:1.45;text-align:left}
+"""
+        body = f"""<div class="card">
+{lang_select_html()}
+<h1 data-i18n="share.h1">Panel partnerski</h1>
+<p class="hint" data-i18n="share.wifi">Ta sama sieć Wi‑Fi co PC z zabawką. Nie używaj danych komórkowych.</p>
 <img src="{qr}" width="240" height="240" alt="QR">
 <code>{link}</code>
-<p><a href="{link}">Otwórz panel</a> · <a href="{health}">Test /health</a></p>
-<p class="hint">Jeśli nie ładuje: ten sam Wi‑Fi, wyłącz VPN na telefonie, na PC włącz panel w Lovense Controller → Zdalne sterowanie.</p>
-</div></body></html>"""
-        return Response(html, mimetype="text/html")
+<p><a href="{link}" data-i18n="share.open">Otwórz panel</a> · <a href="{health}" data-i18n="share.health">Test /health</a></p>
+<p class="hint" data-i18n="share.hint">Jeśli nie ładuje: ten sam Wi‑Fi, wyłącz VPN na telefonie, na PC włącz panel w Lovense Controller → Zdalne sterowanie.</p>
+</div>"""
+        return Response(_web_shell(body, title_key="share.title", extra_css=extra), mimetype="text/html")
 
     @app.get("/api/status")
     def api_status():
@@ -509,6 +553,13 @@ code{{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-si
                 "audio_mode": snap.get("audio_mode") or "playback",
                 "audio_sensitivity": float(snap.get("audio_sensitivity") or 1.4),
                 "audio_gain": float(snap.get("audio_gain") or 10.0),
+                "audio_bands_enabled": bool(snap.get("audio_bands_enabled", True)),
+                "audio_bass_gain": float(snap.get("audio_bass_gain") or 1.0),
+                "audio_treble_gain": float(snap.get("audio_treble_gain") or 1.8),
+                "audio_bass_to_vibrate": bool(snap.get("audio_bass_to_vibrate", True)),
+                "audio_bass_to_pump": bool(snap.get("audio_bass_to_pump", False)),
+                "audio_treble_to_vibrate": bool(snap.get("audio_treble_to_vibrate", False)),
+                "audio_treble_to_pump": bool(snap.get("audio_treble_to_pump", True)),
                 "message": snap["last_message"],
                 "last_ok": snap.get("last_ok", True),
                 "host_name": config.app_name or "Lovense Controller",
@@ -559,10 +610,24 @@ code{{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-si
                     sens = data.get("sensitivity", data.get("audio_sensitivity"))
                     gain = data.get("gain", data.get("audio_gain"))
                     thr = data.get("threshold", data.get("audio_threshold"))
+                    bands = data.get("bands", data.get("audio_bands_enabled"))
+                    bass_g = data.get("bass_gain", data.get("audio_bass_gain"))
+                    treble_g = data.get("treble_gain", data.get("audio_treble_gain"))
+                    b2v = data.get("bass_to_vibrate", data.get("audio_bass_to_vibrate"))
+                    b2p = data.get("bass_to_pump", data.get("audio_bass_to_pump"))
+                    t2v = data.get("treble_to_vibrate", data.get("audio_treble_to_vibrate"))
+                    t2p = data.get("treble_to_pump", data.get("audio_treble_to_pump"))
                     result = controller.set_audio_params(
                         sensitivity=float(sens) if sens is not None else None,
                         gain=float(gain) if gain is not None else None,
                         threshold=float(thr) if thr is not None else None,
+                        bands=bool(bands) if bands is not None else None,
+                        bass_gain=float(bass_g) if bass_g is not None else None,
+                        treble_gain=float(treble_g) if treble_g is not None else None,
+                        bass_to_vibrate=bool(b2v) if b2v is not None else None,
+                        bass_to_pump=bool(b2p) if b2p is not None else None,
+                        treble_to_vibrate=bool(t2v) if t2v is not None else None,
+                        treble_to_pump=bool(t2p) if t2p is not None else None,
                     )
                     return jsonify(
                         {
@@ -570,6 +635,13 @@ code{{display:block;background:#0f0f14;padding:.75rem;border-radius:10px;font-si
                             "message": result.message,
                             "audio_sensitivity": float(config.audio_sensitivity),
                             "audio_gain": float(config.audio_gain),
+                            "audio_bands_enabled": bool(config.audio_bands_enabled),
+                            "audio_bass_gain": float(config.audio_bass_gain),
+                            "audio_treble_gain": float(config.audio_treble_gain),
+                            "audio_bass_to_vibrate": bool(config.audio_bass_to_vibrate),
+                            "audio_bass_to_pump": bool(config.audio_bass_to_pump),
+                            "audio_treble_to_vibrate": bool(config.audio_treble_to_vibrate),
+                            "audio_treble_to_pump": bool(config.audio_treble_to_pump),
                             "audio_enabled": controller.audio_react_enabled(),
                         }
                     )
@@ -719,7 +791,7 @@ REMOTE_PANEL_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0f0f12">
-<title>Panel partnerki · Lovense</title>
+<title data-i18n="panel.doc_title">Panel partnerki · Lovense</title>
 <style>
 :root{
   --bg:#0b0b10; --card:#16161f; --card2:#1e1e2a; --accent:#e11d48; --accent2:#a855f7;
@@ -913,53 +985,65 @@ button.rose{background:#3f0d1a;border-color:#7f1d1d;color:#fecdd3}
   .app{max-width:820px}
   .tab{flex-direction:row;justify-content:flex-start;gap:.45rem;padding:.7rem .65rem;font-size:.85rem}
 }
+.lang-wrap{display:flex;flex-direction:column;align-items:stretch;gap:.12rem;width:100%;margin:0 0 .3rem}
+.lang-lab{font-size:.5rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:center}
+.lang-select{width:100%;font-size:.55rem;padding:.18rem .08rem;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--text)}
+#joinOverlay .lang-wrap,.panel .lang-wrap{flex-direction:row;align-items:center;justify-content:space-between;margin:0 0 .75rem}
+#joinOverlay .lang-lab,.panel .lang-lab{font-size:.75rem;text-align:left;text-transform:none;letter-spacing:0}
+#joinOverlay .lang-select,.panel .lang-select{width:auto;min-width:9rem;font-size:.85rem;padding:.35rem .5rem}
+@media (min-width:640px){
+  .lang-lab{font-size:.62rem;text-align:left}
+  .lang-select{font-size:.72rem;padding:.3rem .35rem}
+}
 </style>
 </head>
 <body>
 <div class="app">
   <!-- LEWY PASEK: kategorie -->
-  <aside class="side" aria-label="Kategorie">
+  <aside class="side" data-i18n-aria="nav.aria" aria-label="Kategorie">
     <div class="brand" title="Lovense">💜</div>
     <nav class="nav" role="tablist">
       <button type="button" class="tab on" data-tab="sila" role="tab" aria-selected="true">
-        <span class="ico">⚡</span>Siła
+        <span class="ico">⚡</span><span data-i18n="nav.power">Siła</span>
       </button>
       <button type="button" class="tab" data-tab="wzorce" role="tab" aria-selected="false">
-        <span class="ico">🌊</span>Wzorce
+        <span class="ico">🌊</span><span data-i18n="nav.patterns">Wzorce</span>
       </button>
       <button type="button" class="tab" data-tab="opcje" role="tab" aria-selected="false">
-        <span class="ico">⚙️</span>Opcje
+        <span class="ico">⚙️</span><span data-i18n="nav.options">Opcje</span>
       </button>
     </nav>
     <div class="side-foot">
+      <!--LANG_SELECT_SIDE-->
       <div id="connPill" class="pill off">off</div>
     </div>
   </aside>
 
   <header class="top">
     <div>
-      <h1 id="panelTitle">Siła</h1>
-      <p class="sub">Panel partnerski</p>
+      <h1 id="panelTitle" data-i18n="nav.power">Siła</h1>
+      <p class="sub" data-i18n="panel.subtitle">Panel partnerski</p>
     </div>
-    <div class="meter" title="Siła wibracji"><i id="meterBar"></i></div>
+    <div class="meter" data-i18n-title="panel.meter" title="Siła wibracji"><i id="meterBar"></i></div>
   </header>
 
   <main class="main">
     <div class="status-bar">
-      <div class="toys" id="toys">Łączenie…</div>
-      <label class="row" style="margin:.35rem 0 0;font-size:.78rem">Cel (zabawka)
+      <div class="toys" id="toys" data-i18n="panel.connecting">Łączenie…</div>
+      <label class="row" style="margin:.35rem 0 0;font-size:.78rem"><span data-i18n="panel.target">Cel (zabawka)</span>
         <select id="toySelect" style="max-width:58%;background:#0f0f14;color:#fff;border:1px solid var(--line);border-radius:8px;padding:.25rem .4rem;font-size:.75rem">
-          <option value="">Wszystkie dozwolone</option>
+          <option value="" data-i18n="panel.all_toys">Wszystkie dozwolone</option>
         </select>
       </label>
       <div class="status-msg" id="status">—</div>
     </div>
     <div id="joinOverlay" style="display:none;position:fixed;inset:0;z-index:200;background:#0b0b10ee;align-items:center;justify-content:center;padding:1rem">
       <div style="background:var(--card);border:1px solid var(--line);border-radius:16px;padding:1.25rem;max-width:360px;width:100%">
-        <h2 style="margin:0 0 .5rem;font-size:1.1rem">Jak masz na imię?</h2>
-        <p style="color:var(--muted);font-size:.8rem;margin:0 0 .75rem">Host zobaczy Twoją nazwę i będzie mógł nadać uprawnienia do zabawek.</p>
-        <input id="joinName" type="text" maxlength="40" placeholder="np. Ania" style="width:100%;padding:.7rem;border-radius:10px;border:1px solid var(--line);background:#0f0f14;color:#fff;font-size:1rem;box-sizing:border-box;margin-bottom:.6rem">
-        <button type="button" class="violet" id="joinBtn" style="width:100%">Dołącz do panelu</button>
+        <!--LANG_SELECT_JOIN-->
+        <h2 style="margin:0 0 .5rem;font-size:1.1rem" data-i18n="join.title">Jak masz na imię?</h2>
+        <p style="color:var(--muted);font-size:.8rem;margin:0 0 .75rem" data-i18n="join.hint">Host zobaczy Twoją nazwę i będzie mógł nadać uprawnienia do zabawek.</p>
+        <input id="joinName" type="text" maxlength="40" data-i18n-placeholder="join.placeholder" placeholder="np. Ania" style="width:100%;padding:.7rem;border-radius:10px;border:1px solid var(--line);background:#0f0f14;color:#fff;font-size:1rem;box-sizing:border-box;margin-bottom:.6rem">
+        <button type="button" class="violet" id="joinBtn" style="width:100%" data-i18n="join.button">Dołącz do panelu</button>
         <p id="joinErr" class="hint" style="color:#fca5a5"></p>
       </div>
     </div>
@@ -968,30 +1052,30 @@ button.rose{background:#3f0d1a;border-color:#7f1d1d;color:#fecdd3}
       <!-- ===== SIŁA ===== -->
       <div class="panel on" id="panel-sila" role="tabpanel">
         <div class="subtabs" data-group="sila">
-          <button type="button" class="subtab on" data-sub="quick">Poziomy</button>
-          <button type="button" class="subtab" data-sub="sliders">Suwaki</button>
-          <button type="button" class="subtab" data-sub="boost">Boost</button>
+          <button type="button" class="subtab on" data-sub="quick" data-i18n="sub.quick">Poziomy</button>
+          <button type="button" class="subtab" data-sub="sliders" data-i18n="sub.sliders">Suwaki</button>
+          <button type="button" class="subtab" data-sub="boost" data-i18n="sub.boost">Boost</button>
         </div>
         <div class="card">
           <div class="subpane on" data-subpane="quick" data-group="sila">
-            <div class="subhead">Szybkie poziomy <span class="tag">0–9</span></div>
+            <div class="subhead"><span data-i18n="quick.head">Szybkie poziomy</span> <span class="tag">0–9</span></div>
             <div class="grid" id="quickLevels"></div>
-            <p class="hint">0 = stop. Jedno kliknięcie ustawia wibracje.</p>
+            <p class="hint" data-i18n="quick.hint">0 = stop. Jedno kliknięcie ustawia wibracje.</p>
           </div>
           <div class="subpane" data-subpane="sliders" data-group="sila">
-            <div class="subhead">Precyzyjnie <span class="tag">suwaki</span></div>
-            <label class="row">Wibracje <span class="value" id="vLabel">0</span></label>
+            <div class="subhead"><span data-i18n="sliders.head">Precyzyjnie</span> <span class="tag" data-i18n="sliders.tag">suwaki</span></div>
+            <label class="row"><span data-i18n="vibrate">Wibracje</span> <span class="value" id="vLabel">0</span></label>
             <input type="range" id="vibrate" min="0" max="20" value="0" step="1">
-            <label class="row">Pump / 2. funkcja <span class="value" id="pLabel">0</span></label>
+            <label class="row"><span data-i18n="pump">Pump / 2. funkcja</span> <span class="value" id="pLabel">0</span></label>
             <input type="range" id="pump" min="0" max="3" value="0" step="1">
-            <p class="hint">Live i czas impulsu — w Opcjach.</p>
+            <p class="hint" data-i18n="sliders.hint">Live i czas impulsu — w Opcjach.</p>
           </div>
           <div class="subpane" data-subpane="boost" data-group="sila">
-            <div class="subhead">Boost <span class="tag">krótki zastrzyk</span></div>
+            <div class="subhead"><span data-i18n="boost.head">Boost</span> <span class="tag" data-i18n="boost.tag">krótki zastrzyk</span></div>
             <div class="grid3">
-              <button type="button" class="soft" data-boost="8">Lekki 3s</button>
-              <button type="button" class="soft" data-boost="14">Mocny 3s</button>
-              <button type="button" class="soft" data-boost="20">Max 2s</button>
+              <button type="button" class="soft" data-boost="8" data-i18n="boost.light">Lekki 3s</button>
+              <button type="button" class="soft" data-boost="14" data-i18n="boost.strong">Mocny 3s</button>
+              <button type="button" class="soft" data-boost="20" data-i18n="boost.max">Max 2s</button>
             </div>
           </div>
         </div>
@@ -1000,74 +1084,74 @@ button.rose{background:#3f0d1a;border-color:#7f1d1d;color:#fecdd3}
       <!-- ===== WZORCE ===== -->
       <div class="panel" id="panel-wzorce" role="tabpanel">
         <div class="subtabs" data-group="wzorce">
-          <button type="button" class="subtab on" data-sub="classic">Klasyczne</button>
-          <button type="button" class="subtab" data-sub="special">Specjalne</button>
-          <button type="button" class="subtab" data-sub="long">Długie</button>
-          <button type="button" class="subtab" data-sub="rhythm">Rytm</button>
-          <button type="button" class="subtab" data-sub="time">Czas</button>
+          <button type="button" class="subtab on" data-sub="classic" data-i18n="sub.classic">Klasyczne</button>
+          <button type="button" class="subtab" data-sub="special" data-i18n="sub.special">Specjalne</button>
+          <button type="button" class="subtab" data-sub="long" data-i18n="sub.long">Długie</button>
+          <button type="button" class="subtab" data-sub="rhythm" data-i18n="sub.rhythm">Rytm</button>
+          <button type="button" class="subtab" data-sub="time" data-i18n="sub.time">Czas</button>
         </div>
         <div class="card">
           <div class="subpane on" data-subpane="classic" data-group="wzorce">
-            <div class="subhead">Presety klasyczne <span class="tag">API</span></div>
+            <div class="subhead"><span data-i18n="classic.head">Presety klasyczne</span> <span class="tag">API</span></div>
             <div class="grid2">
-              <button type="button" class="violet preset-btn" data-preset="pulse" data-sec="10"><b>Pulse</b><span>pulsowanie · 10s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="wave" data-sec="12"><b>Wave</b><span>fala · 12s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="fireworks" data-sec="10"><b>Fireworks</b><span>wybuchy · 10s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="earthquake" data-sec="12"><b>Earthquake</b><span>trzęsienie · 12s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="pulse" data-sec="10"><b>Pulse</b><span data-i18n="preset.pulse">pulsowanie · 10s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="wave" data-sec="12"><b>Wave</b><span data-i18n="preset.wave">fala · 12s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="fireworks" data-sec="10"><b>Fireworks</b><span data-i18n="preset.fireworks">wybuchy · 10s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="earthquake" data-sec="12"><b>Earthquake</b><span data-i18n="preset.earthquake">trzęsienie · 12s</span></button>
             </div>
           </div>
           <div class="subpane" data-subpane="special" data-group="wzorce">
-            <div class="subhead">Presety specjalne <span class="tag">+ nowe</span></div>
+            <div class="subhead"><span data-i18n="special.head">Presety specjalne</span> <span class="tag" data-i18n="special.tag">+ nowe</span></div>
             <div class="grid2">
-              <button type="button" class="rose preset-btn" data-preset="tease" data-sec="15"><b>Tease</b><span>drażnienie · 15s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="climb" data-sec="12"><b>Climb</b><span>wspinaczka · 12s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="edge" data-sec="14"><b>Edge</b><span>na krawędzi · 14s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="throb" data-sec="10"><b>Throb</b><span>bicie · 10s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="heartbeat" data-sec="16"><b>Heartbeat</b><span>serce · 16s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="ripple" data-sec="14"><b>Ripple</b><span>małe fale · 14s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="stutter" data-sec="12"><b>Stutter</b><span>przerywane · 12s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="bounce" data-sec="12"><b>Bounce</b><span>odbicia · 12s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="cascade" data-sec="15"><b>Cascade</b><span>kaskada · 15s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="breath" data-sec="20"><b>Breath</b><span>oddech · 20s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="ocean" data-sec="25"><b>Ocean</b><span>morze · 25s</span></button>
-              <button type="button" class="rose preset-btn" data-preset="spark" data-sec="10"><b>Spark</b><span>iskry · 10s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="tease" data-sec="15"><b>Tease</b><span data-i18n="preset.tease">drażnienie · 15s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="climb" data-sec="12"><b>Climb</b><span data-i18n="preset.climb">wspinaczka · 12s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="edge" data-sec="14"><b>Edge</b><span data-i18n="preset.edge">na krawędzi · 14s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="throb" data-sec="10"><b>Throb</b><span data-i18n="preset.throb">bicie · 10s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="heartbeat" data-sec="16"><b>Heartbeat</b><span data-i18n="preset.heartbeat">serce · 16s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="ripple" data-sec="14"><b>Ripple</b><span data-i18n="preset.ripple">małe fale · 14s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="stutter" data-sec="12"><b>Stutter</b><span data-i18n="preset.stutter">przerywane · 12s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="bounce" data-sec="12"><b>Bounce</b><span data-i18n="preset.bounce">odbicia · 12s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="cascade" data-sec="15"><b>Cascade</b><span data-i18n="preset.cascade">kaskada · 15s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="breath" data-sec="20"><b>Breath</b><span data-i18n="preset.breath">oddech · 20s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="ocean" data-sec="25"><b>Ocean</b><span data-i18n="preset.ocean">morze · 25s</span></button>
+              <button type="button" class="rose preset-btn" data-preset="spark" data-sec="10"><b>Spark</b><span data-i18n="preset.spark">iskry · 10s</span></button>
             </div>
           </div>
           <div class="subpane" data-subpane="long" data-group="wzorce">
-            <div class="subhead">Długie sekwencje <span class="tag">35–60 s</span></div>
+            <div class="subhead"><span data-i18n="long.head">Długie sekwencje</span> <span class="tag">35–60 s</span></div>
             <div class="grid2">
-              <button type="button" class="violet preset-btn" data-preset="slowburn" data-sec="45"><b>Slow burn</b><span>wolny wzrost · 45s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="marathon" data-sec="60"><b>Maraton</b><span>długa jazda · 60s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="teaselong" data-sec="40"><b>Tease long</b><span>długie drażnienie · 40s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="edgelong" data-sec="45"><b>Edge long</b><span>długa krawędź · 45s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="waveslow" data-sec="50"><b>Wave slow</b><span>wolna fala · 50s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="deepwave" data-sec="55"><b>Deep wave</b><span>głęboka fala · 55s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="crescendo" data-sec="40"><b>Crescendo</b><span>narastanie · 40s</span></button>
-              <button type="button" class="violet preset-btn" data-preset="afterglow" data-sec="35"><b>Afterglow</b><span>wyciszanie · 35s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="slowburn" data-sec="45"><b>Slow burn</b><span data-i18n="preset.slowburn">wolny wzrost · 45s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="marathon" data-sec="60"><b>Maraton</b><span data-i18n="preset.marathon">długa jazda · 60s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="teaselong" data-sec="40"><b>Tease long</b><span data-i18n="preset.teaselong">długie drażnienie · 40s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="edgelong" data-sec="45"><b>Edge long</b><span data-i18n="preset.edgelong">długa krawędź · 45s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="waveslow" data-sec="50"><b>Wave slow</b><span data-i18n="preset.waveslow">wolna fala · 50s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="deepwave" data-sec="55"><b>Deep wave</b><span data-i18n="preset.deepwave">głęboka fala · 55s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="crescendo" data-sec="40"><b>Crescendo</b><span data-i18n="preset.crescendo">narastanie · 40s</span></button>
+              <button type="button" class="violet preset-btn" data-preset="afterglow" data-sec="35"><b>Afterglow</b><span data-i18n="preset.afterglow">wyciszanie · 35s</span></button>
             </div>
-            <p class="hint">Czas z przycisku ma pierwszeństwo; zakładka „Czas” zmienia domyślny dla krótkich wzorców.</p>
+            <p class="hint" data-i18n="long.hint">Czas z przycisku ma pierwszeństwo; zakładka „Czas” zmienia domyślny dla krótkich wzorców.</p>
           </div>
           <div class="subpane" data-subpane="rhythm" data-group="wzorce">
-            <div class="subhead">Wzorce rytmiczne <span class="tag">pattern</span></div>
+            <div class="subhead"><span data-i18n="rhythm.head">Wzorce rytmiczne</span> <span class="tag">pattern</span></div>
             <div class="pat">
-              <button type="button" data-pattern="0;8;16;20;16;8;0" data-int="180" data-sec="12"><b>Fala</b><span>miękko góra–dół</span></button>
-              <button type="button" data-pattern="20;0;20;0;20;0" data-int="200" data-sec="10"><b>Strobe</b><span>ostre impulsy</span></button>
-              <button type="button" data-pattern="4;8;12;16;20;16;12;8" data-int="120" data-sec="12"><b>Budowa</b><span>rosnąco</span></button>
-              <button type="button" data-pattern="20;15;10;5;10;15;20" data-int="150" data-sec="12"><b>Huśtawka</b><span>góra i dół</span></button>
-              <button type="button" data-pattern="0;0;18;18;0;0;12;12" data-int="160" data-sec="12"><b>Telegraf</b><span>krótko–długo</span></button>
-              <button type="button" data-pattern="10;12;14;16;18;20;18;16" data-int="100" data-sec="10"><b>Wibro</b><span>szybkie zmiany</span></button>
-              <button type="button" data-pattern="0;10;0;14;0;18;0;20;0;10" data-int="200" data-sec="14"><b>Pukanie</b><span>rytm serca</span></button>
-              <button type="button" data-pattern="5;10;15;20;15;10;5;10;15;10;5" data-int="220" data-sec="16"><b>Sinus</b><span>gładka fala</span></button>
-              <button type="button" data-pattern="2;4;6;8;10;12;14;16;18;20;18;16;14;12;10;8;6;4;2" data-int="300" data-sec="30"><b>Długa rampa</b><span>~30 s w górę/dół</span></button>
-              <button type="button" data-pattern="8;8;8;16;16;16;8;8;20;20;4;4;12;12" data-int="250" data-sec="20"><b>Bloki</b><span>płaskie odcinki</span></button>
-              <button type="button" data-pattern="0;5;0;10;0;15;0;20;0;15;0;10;0;5;0" data-int="280" data-sec="25"><b>Iskry long</b><span>przerywane 25s</span></button>
-              <button type="button" data-pattern="12;14;16;18;20;18;16;14;12;10;8;10;12;14;16;18;16;14;12" data-int="350" data-sec="40"><b>Maraton rytm</b><span>wolno ~40s</span></button>
+              <button type="button" data-pattern="0;8;16;20;16;8;0" data-int="180" data-sec="12"><b data-i18n="pat.wave">Fala</b><span data-i18n="pat.wave.d">miękko góra–dół</span></button>
+              <button type="button" data-pattern="20;0;20;0;20;0" data-int="200" data-sec="10"><b data-i18n="pat.strobe">Strobe</b><span data-i18n="pat.strobe.d">ostre impulsy</span></button>
+              <button type="button" data-pattern="4;8;12;16;20;16;12;8" data-int="120" data-sec="12"><b data-i18n="pat.build">Budowa</b><span data-i18n="pat.build.d">rosnąco</span></button>
+              <button type="button" data-pattern="20;15;10;5;10;15;20" data-int="150" data-sec="12"><b data-i18n="pat.swing">Huśtawka</b><span data-i18n="pat.swing.d">góra i dół</span></button>
+              <button type="button" data-pattern="0;0;18;18;0;0;12;12" data-int="160" data-sec="12"><b data-i18n="pat.telegraph">Telegraf</b><span data-i18n="pat.telegraph.d">krótko–długo</span></button>
+              <button type="button" data-pattern="10;12;14;16;18;20;18;16" data-int="100" data-sec="10"><b data-i18n="pat.vibro">Wibro</b><span data-i18n="pat.vibro.d">szybkie zmiany</span></button>
+              <button type="button" data-pattern="0;10;0;14;0;18;0;20;0;10" data-int="200" data-sec="14"><b data-i18n="pat.knock">Pukanie</b><span data-i18n="pat.knock.d">rytm serca</span></button>
+              <button type="button" data-pattern="5;10;15;20;15;10;5;10;15;10;5" data-int="220" data-sec="16"><b data-i18n="pat.sine">Sinus</b><span data-i18n="pat.sine.d">gładka fala</span></button>
+              <button type="button" data-pattern="2;4;6;8;10;12;14;16;18;20;18;16;14;12;10;8;6;4;2" data-int="300" data-sec="30"><b data-i18n="pat.ramp">Długa rampa</b><span data-i18n="pat.ramp.d">~30 s w górę/dół</span></button>
+              <button type="button" data-pattern="8;8;8;16;16;16;8;8;20;20;4;4;12;12" data-int="250" data-sec="20"><b data-i18n="pat.blocks">Bloki</b><span data-i18n="pat.blocks.d">płaskie odcinki</span></button>
+              <button type="button" data-pattern="0;5;0;10;0;15;0;20;0;15;0;10;0;5;0" data-int="280" data-sec="25"><b data-i18n="pat.sparks">Iskry long</b><span data-i18n="pat.sparks.d">przerywane 25s</span></button>
+              <button type="button" data-pattern="12;14;16;18;20;18;16;14;12;10;8;10;12;14;16;18;16;14;12" data-int="350" data-sec="40"><b data-i18n="pat.marathon">Maraton rytm</b><span data-i18n="pat.marathon.d">wolno ~40s</span></button>
             </div>
           </div>
           <div class="subpane" data-subpane="time" data-group="wzorce">
-            <div class="subhead">Czas trwania <span class="tag">preset / pattern</span></div>
+            <div class="subhead"><span data-i18n="time.head">Czas trwania</span> <span class="tag">preset / pattern</span></div>
             <div class="grid4" id="durGrid"></div>
-            <p class="hint">Domyślny czas, gdy przycisk nie ma własnego. STOP zawsze od razu.</p>
+            <p class="hint" data-i18n="time.hint">Domyślny czas, gdy przycisk nie ma własnego. STOP zawsze od razu.</p>
           </div>
         </div>
       </div>
@@ -1076,38 +1160,60 @@ button.rose{background:#3f0d1a;border-color:#7f1d1d;color:#fecdd3}
       <div class="panel" id="panel-opcje" role="tabpanel">
         <div class="card">
           <div class="subblock">
-            <div class="subhead">Audio → zabawka <span class="tag">u hosta</span></div>
+            <div class="subhead" data-i18n="lang.label">Język</div>
+            <!--LANG_SELECT_JOIN-->
+          </div>
+          <div class="subblock">
+            <div class="subhead"><span data-i18n="audio.head">Audio → zabawka</span> <span class="tag" data-i18n="audio.tag">u hosta</span></div>
             <div class="live">
-              <span id="audioLbl">Reakcja na dźwięk (wył.)</span>
+              <span id="audioLbl" data-i18n="audio.off">Reakcja na dźwięk (wył.)</span>
               <label class="toggle"><input type="checkbox" id="audioReact"><span class="slider"></span></label>
             </div>
             <div class="grid2" style="margin-top:.5rem">
-              <button type="button" class="soft" id="audioOn">Włącz audio</button>
-              <button type="button" class="soft" id="audioOff">Wyłącz audio</button>
+              <button type="button" class="soft" id="audioOn" data-i18n="audio.enable">Włącz audio</button>
+              <button type="button" class="soft" id="audioOff" data-i18n="audio.disable">Wyłącz audio</button>
             </div>
-            <label class="row" style="margin-top:.65rem">Czułość <span class="value" id="sensLabel">1.4</span></label>
+            <label class="row" style="margin-top:.65rem"><span data-i18n="audio.sens">Czułość</span> <span class="value" id="sensLabel">1.4</span></label>
             <input type="range" id="audioSens" min="0.3" max="3.0" value="1.4" step="0.1">
-            <label class="row">Wzmocnienie (gain) <span class="value" id="gainLabel">10</span></label>
+            <label class="row"><span data-i18n="audio.gain">Wzmocnienie (gain)</span> <span class="value" id="gainLabel">10</span></label>
             <input type="range" id="audioGain" min="1" max="30" value="10" step="0.5">
-            <p class="hint" id="audioHint">Dźwięk u partnera (PC) → wibracje. Czułość/gain działają od razu gdy audio WŁ.</p>
+            <div class="live" style="margin-top:.5rem">
+              <span data-i18n="audio.bands">Bas → wibracje, treble → 2. funkcja</span>
+              <label class="toggle"><input type="checkbox" id="audioBands" checked><span class="slider"></span></label>
+            </div>
+            <div id="audioBandsBox">
+              <div class="live"><span data-i18n="audio.bass_vib">Wibracje od basu</span>
+                <label class="toggle"><input type="checkbox" id="audioBassVib" checked><span class="slider"></span></label></div>
+              <div class="live"><span data-i18n="audio.bass_pump">Pump od basu</span>
+                <label class="toggle"><input type="checkbox" id="audioBassPump"><span class="slider"></span></label></div>
+              <div class="live"><span data-i18n="audio.treble_vib">Wibracje od treble</span>
+                <label class="toggle"><input type="checkbox" id="audioTrebleVib"><span class="slider"></span></label></div>
+              <div class="live"><span data-i18n="audio.treble_pump">Pump od treble</span>
+                <label class="toggle"><input type="checkbox" id="audioTreblePump" checked><span class="slider"></span></label></div>
+              <label class="row"><span data-i18n="audio.bass">Wzmocnienie basu</span> <span class="value" id="bassGainLabel">1.0</span></label>
+              <input type="range" id="audioBassGain" min="0.2" max="4" value="1" step="0.1">
+              <label class="row"><span data-i18n="audio.treble">Wzmocnienie treble</span> <span class="value" id="trebleGainLabel">1.8</span></label>
+              <input type="range" id="audioTrebleGain" min="0.2" max="6" value="1.8" step="0.1">
+            </div>
+            <p class="hint" id="audioHint" data-i18n="audio.hint">Dźwięk u partnera (PC) → wibracje. Czułość/gain działają od razu gdy audio WŁ.</p>
           </div>
           <div class="subblock">
-            <div class="subhead">Tryb live <span class="tag">suwaki</span></div>
+            <div class="subhead"><span data-i18n="live.head">Tryb live</span> <span class="tag" data-i18n="live.tag">suwaki</span></div>
             <div class="live">
-              <span>Suwaki od razu wysyłają</span>
+              <span data-i18n="live.label">Suwaki od razu wysyłają</span>
               <label class="toggle"><input type="checkbox" id="live" checked><span class="slider"></span></label>
             </div>
-            <p class="hint">Wyłącz → ustaw poziomy, potem „Wyślij”.</p>
+            <p class="hint" data-i18n="live.hint">Wyłącz → ustaw poziomy, potem „Wyślij”.</p>
           </div>
           <div class="subblock">
-            <div class="subhead">Czas impulsu <span class="tag">function</span></div>
-            <label class="row">Sekundy <span class="value" id="tLabel">0</span></label>
+            <div class="subhead"><span data-i18n="impulse.head">Czas impulsu</span> <span class="tag">function</span></div>
+            <label class="row"><span data-i18n="impulse.sec">Sekundy</span> <span class="value" id="tLabel">0</span></label>
             <input type="range" id="time" min="0" max="30" value="0" step="1">
-            <p class="hint">0 = bez limitu (do STOP). &gt;0 = krótki impuls.</p>
+            <p class="hint" data-i18n="impulse.hint">0 = bez limitu (do STOP). &gt;0 = krótki impuls.</p>
           </div>
           <div class="subblock">
-            <div class="subhead">Bezpieczeństwo</div>
-            <p class="hint" style="margin-top:0">STOP zawsze na dole · szanuj granice · link z tokenem jest prywatny.</p>
+            <div class="subhead" data-i18n="safety.head">Bezpieczeństwo</div>
+            <p class="hint" style="margin-top:0" data-i18n="safety.hint">STOP zawsze na dole · szanuj granice · link z tokenem jest prywatny.</p>
           </div>
         </div>
       </div>
@@ -1115,12 +1221,12 @@ button.rose{background:#3f0d1a;border-color:#7f1d1d;color:#fecdd3}
   </main>
 
   <div class="dock">
-    <button type="button" class="stop" id="btnStop">STOP</button>
-    <button type="button" class="send" id="btnApply">Wyślij</button>
+    <button type="button" class="stop" id="btnStop" data-i18n="dock.stop">STOP</button>
+    <button type="button" class="send" id="btnApply" data-i18n="dock.send">Wyślij</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
-
+<!--I18N_BOOT-->
 <script>
 const params = new URLSearchParams(location.search);
 let TOKEN = params.get('token') || '';
@@ -1142,6 +1248,16 @@ const audioLbl = $('audioLbl');
 const audioHint = $('audioHint');
 const audioSens = $('audioSens');
 const audioGain = $('audioGain');
+const audioBands = $('audioBands');
+const audioBandsBox = $('audioBandsBox');
+const audioBassGain = $('audioBassGain');
+const audioTrebleGain = $('audioTrebleGain');
+const bassGainLabel = $('bassGainLabel');
+const trebleGainLabel = $('trebleGainLabel');
+const audioBassVib = $('audioBassVib');
+const audioBassPump = $('audioBassPump');
+const audioTrebleVib = $('audioTrebleVib');
+const audioTreblePump = $('audioTreblePump');
 const sensLabel = $('sensLabel');
 const gainLabel = $('gainLabel');
 let audioAllowed = true;
@@ -1149,9 +1265,15 @@ let audioParamsAllowed = true;
 let audioSyncing = false;
 let audioParamTimer = null;
 
-const TITLES = { sila: 'Siła', wzorce: 'Wzorce', opcje: 'Opcje' };
+const TAB_KEYS = { sila: 'nav.power', wzorce: 'nav.patterns', opcje: 'nav.options' };
 const SS_KEY = 'lc_session_' + (TOKEN || '').slice(0, 12);
 const NAME_KEY = 'lc_name';
+function tabTitle(id){ return t(TAB_KEYS[id] || id); }
+function errText(code, fallback){
+  const key = 'err.' + code;
+  const s = t(key);
+  return (s && s !== key) ? s : (fallback || s);
+}
 
 let patternDuration = 10;
 let dragging = false;
@@ -1186,7 +1308,8 @@ function switchTab(id){
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.toggle('on', p.id === 'panel-' + id);
   });
-  panelTitle.textContent = TITLES[id] || id;
+  panelTitle.textContent = tabTitle(id);
+  panelTitle.removeAttribute('data-i18n');
   try{ history.replaceState(null, '', '#' + id); }catch(e){}
 }
 document.querySelectorAll('.tab').forEach(tab => {
@@ -1257,7 +1380,7 @@ durs.forEach((d) => {
     patternDuration = d;
     dg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
-    toast('Czas: ' + d + 's');
+    toast(t('toast.time', {n: d}));
   };
   dg.appendChild(b);
 });
@@ -1296,14 +1419,14 @@ async function api(path, opts={}){
     if(err === 'kicked' || err === 'banned'){
       SESSION_ID = '';
       localStorage.removeItem(SS_KEY);
-      showJoin(data.message || (err === 'banned' ? 'IP zablokowane przez hosta' : 'Wyrzucono — dołącz ponownie'));
+      showJoin(errText(err === 'banned' ? 'banned' : 'kicked_rejoin', data.message));
     }
     if(err === 'no_session'){
       SESSION_ID = '';
       localStorage.removeItem(SS_KEY);
-      showJoin('Sesja wygasła — dołącz ponownie');
+      showJoin(errText('no_session', data.message));
     }
-    const e = new Error(data.message || err);
+    const e = new Error(errText(err, data.message || err));
     e.code = err;
     throw e;
   }
@@ -1322,7 +1445,7 @@ async function joinSession(name){
     localStorage.setItem(SS_KEY, SESSION_ID);
     canControl = !!data.session.can_control;
     hideJoin();
-    toast('Połączono jako ' + DISPLAY_NAME);
+    toast(t('toast.joined', {name: DISPLAY_NAME}));
   }
   return data;
 }
@@ -1340,20 +1463,20 @@ $('joinName').addEventListener('keydown', e => { if(e.key==='Enter') $('joinBtn'
 
 async function sendControl(body){
   if(!joined || !SESSION_ID){
-    showJoin('Najpierw dołącz');
+    showJoin(t('toast.join_first'));
     return;
   }
   const act = (body.action || '').toLowerCase();
   const isAudio = act === 'audio' || act === 'audio_toggle' || act === 'audio_on' || act === 'audio_off' || act === 'audio_react';
   if(!canControl && act !== 'stop' && !isAudio){
-    statusEl.textContent = 'Host wyłączył Ci sterowanie';
+    statusEl.textContent = t('status.no_control');
     statusEl.className = 'status-msg msg-err';
-    toast('Brak uprawnień');
+    toast(t('toast.no_perm'));
     return;
   }
   // audio: host może wyłączyć „can_control” ale audio nadal przez allow_audio
   if(isAudio && !canControl && !audioAllowed){
-    toast('Brak uprawnień do audio');
+    toast(t('toast.no_audio'));
     return;
   }
   try{
@@ -1363,11 +1486,11 @@ async function sendControl(body){
     lastOk = !!data.ok;
     statusEl.textContent = data.message || 'OK';
     statusEl.className = 'status-msg ' + (lastOk ? 'msg-ok' : 'msg-err');
-    if(body.action === 'stop') toast('STOP');
+    if(body.action === 'stop') toast(t('toast.stop'));
     return data;
   }catch(e){
     lastOk = false;
-    statusEl.textContent = 'Błąd: ' + e.message;
+    statusEl.textContent = t('status.error', {msg: e.message});
     statusEl.className = 'status-msg msg-err';
     if(e.code !== 'kicked' && e.code !== 'banned' && e.code !== 'no_session'){
       connPill.textContent = 'off';
@@ -1383,7 +1506,7 @@ function sendNow(){
   });
 }
 
-$('btnApply').onclick = () => { buzz(8); sendNow(); toast('Wysłano'); };
+$('btnApply').onclick = () => { buzz(8); sendNow(); toast(t('toast.sent')); };
 $('btnStop').onclick = () => {
   buzz(25);
   setLevels(0, 0, false);
@@ -1395,7 +1518,7 @@ document.querySelectorAll('[data-preset]').forEach(btn => {
     buzz();
     const sec = btn.dataset.sec ? +btn.dataset.sec : patternDuration;
     sendControl({action:'preset', name: btn.dataset.preset, time_sec: sec});
-    toast('Preset: ' + btn.dataset.preset + ' · ' + sec + 's');
+    toast(t('toast.preset', {name: btn.dataset.preset, n: sec}));
   };
 });
 document.querySelectorAll('[data-pattern]').forEach(btn => {
@@ -1408,7 +1531,7 @@ document.querySelectorAll('[data-pattern]').forEach(btn => {
       interval_ms: +btn.dataset.int || 180,
       time_sec: sec
     });
-    toast('Wzorzec · ' + sec + 's');
+    toast(t('toast.pattern', {n: sec}));
   };
 });
 document.querySelectorAll('[data-boost]').forEach(btn => {
@@ -1418,14 +1541,14 @@ document.querySelectorAll('[data-boost]').forEach(btn => {
     const sec = v >= 20 ? 2 : 3;
     setLevels(v, Math.min(+pump.max, v >= 15 ? 2 : 1), false);
     sendControl({ action:'function', vibrate:v, pump:+pump.value, time_sec: sec });
-    toast('Boost ' + sec + 's');
+    toast(t('toast.boost', {n: sec}));
   };
 });
 
 function fillToySelect(toys){
   if(!toySelect) return;
   const prev = toySelect.value;
-  const opts = ['<option value="">Wszystkie dozwolone</option>'];
+  const opts = ['<option value="">' + t('panel.all_toys') + '</option>'];
   (toys||[]).filter(t => t.connected).forEach(t => {
     const id = t.id;
     const lab = (t.display_name||t.name||id).replace(/</g,'');
@@ -1435,7 +1558,14 @@ function fillToySelect(toys){
   if(prev && [...toySelect.options].some(o => o.value === prev)) toySelect.value = prev;
 }
 
-function setAudioUi(enabled, mode, allowed, paramsAllowed, sens, gain){
+function setChk(el, val){
+  if(!el || val == null) return;
+  audioSyncing = true;
+  el.checked = !!val;
+  audioSyncing = false;
+}
+
+function setAudioUi(enabled, mode, allowed, paramsAllowed, sens, gain, bands, bassGain, trebleGain, routes){
   audioAllowed = allowed !== false;
   audioParamsAllowed = paramsAllowed !== false;
   if(audioReactEl){
@@ -1446,8 +1576,9 @@ function setAudioUi(enabled, mode, allowed, paramsAllowed, sens, gain){
   }
   if(audioLbl){
     audioLbl.textContent = enabled
-      ? ('Reakcja na dźwięk (WŁ) · ' + (mode || 'playback'))
-      : 'Reakcja na dźwięk (wył.)';
+      ? t('audio.on', {mode: mode || 'playback'})
+      : t('audio.off');
+    audioLbl.removeAttribute('data-i18n');
   }
   if(audioSens && sens != null && document.activeElement !== audioSens){
     audioSyncing = true;
@@ -1461,12 +1592,42 @@ function setAudioUi(enabled, mode, allowed, paramsAllowed, sens, gain){
     if(gainLabel) gainLabel.textContent = (+gain).toFixed(1);
     audioSyncing = false;
   }
+  if(audioBands && bands != null){
+    audioSyncing = true;
+    audioBands.checked = !!bands;
+    audioSyncing = false;
+  }
+  if(audioBassGain && bassGain != null && document.activeElement !== audioBassGain){
+    audioSyncing = true;
+    audioBassGain.value = bassGain;
+    if(bassGainLabel) bassGainLabel.textContent = (+bassGain).toFixed(1);
+    audioSyncing = false;
+  }
+  if(audioTrebleGain && trebleGain != null && document.activeElement !== audioTrebleGain){
+    audioSyncing = true;
+    audioTrebleGain.value = trebleGain;
+    if(trebleGainLabel) trebleGainLabel.textContent = (+trebleGain).toFixed(1);
+    audioSyncing = false;
+  }
+  const r = routes || {};
+  setChk(audioBassVib, r.bass_to_vibrate);
+  setChk(audioBassPump, r.bass_to_pump);
+  setChk(audioTrebleVib, r.treble_to_vibrate);
+  setChk(audioTreblePump, r.treble_to_pump);
+  if(audioBandsBox) audioBandsBox.style.display = (audioBands && audioBands.checked) ? '' : 'none';
   if(audioSens) audioSens.disabled = !audioParamsAllowed;
   if(audioGain) audioGain.disabled = !audioParamsAllowed;
+  if(audioBands) audioBands.disabled = !audioParamsAllowed;
+  if(audioBassGain) audioBassGain.disabled = !audioParamsAllowed;
+  if(audioTrebleGain) audioTrebleGain.disabled = !audioParamsAllowed;
+  [audioBassVib, audioBassPump, audioTrebleVib, audioTreblePump].forEach(el => {
+    if(el) el.disabled = !audioParamsAllowed;
+  });
   if(audioHint){
-    if(!audioAllowed) audioHint.textContent = 'Host zablokował zdalne sterowanie audio.';
-    else if(!audioParamsAllowed) audioHint.textContent = 'Audio ON/OFF OK · host zablokował czułość/gain.';
-    else audioHint.textContent = 'Włącz audio i ustaw czułość/gain — działa od razu u partnera (PC).';
+    if(!audioAllowed) audioHint.textContent = t('audio.blocked');
+    else if(!audioParamsAllowed) audioHint.textContent = t('audio.params_blocked');
+    else audioHint.textContent = t('audio.hint_bands');
+    audioHint.removeAttribute('data-i18n');
   }
   const onB = $('audioOn'), offB = $('audioOff');
   if(onB) onB.disabled = !audioAllowed;
@@ -1474,16 +1635,16 @@ function setAudioUi(enabled, mode, allowed, paramsAllowed, sens, gain){
 }
 
 async function setAudioRemote(enabled){
-  if(!audioAllowed){ toast('Audio zablokowane przez hosta'); return; }
+  if(!audioAllowed){ toast(t('toast.audio_blocked')); return; }
   try{
     const data = await sendControl({ action: 'audio', enabled: !!enabled });
     if(data){
       setAudioUi(!!data.audio_enabled, null, audioAllowed, audioParamsAllowed,
         audioSens ? +audioSens.value : null, audioGain ? +audioGain.value : null);
-      toast(data.audio_enabled ? 'Audio WŁĄCZONE' : 'Audio WYŁĄCZONE');
+      toast(data.audio_enabled ? t('toast.audio_on') : t('toast.audio_off'));
     }
   }catch(e){
-    toast('Audio: ' + (e.message || e));
+    toast(t('toast.audio_err', {msg: e.message || e}));
   }
 }
 
@@ -1491,17 +1652,27 @@ function scheduleAudioParams(){
   if(audioSyncing || !audioParamsAllowed) return;
   if(sensLabel && audioSens) sensLabel.textContent = (+audioSens.value).toFixed(1);
   if(gainLabel && audioGain) gainLabel.textContent = (+audioGain.value).toFixed(1);
+  if(bassGainLabel && audioBassGain) bassGainLabel.textContent = (+audioBassGain.value).toFixed(1);
+  if(trebleGainLabel && audioTrebleGain) trebleGainLabel.textContent = (+audioTrebleGain.value).toFixed(1);
+  if(audioBandsBox) audioBandsBox.style.display = (audioBands && audioBands.checked) ? '' : 'none';
   clearTimeout(audioParamTimer);
   audioParamTimer = setTimeout(async () => {
     try{
       const data = await sendControl({
         action: 'audio_params',
         sensitivity: audioSens ? +audioSens.value : undefined,
-        gain: audioGain ? +audioGain.value : undefined
+        gain: audioGain ? +audioGain.value : undefined,
+        bands: audioBands ? !!audioBands.checked : undefined,
+        bass_gain: audioBassGain ? +audioBassGain.value : undefined,
+        treble_gain: audioTrebleGain ? +audioTrebleGain.value : undefined,
+        bass_to_vibrate: audioBassVib ? !!audioBassVib.checked : undefined,
+        bass_to_pump: audioBassPump ? !!audioBassPump.checked : undefined,
+        treble_to_vibrate: audioTrebleVib ? !!audioTrebleVib.checked : undefined,
+        treble_to_pump: audioTreblePump ? !!audioTreblePump.checked : undefined
       });
       if(data && data.message) statusEl.textContent = data.message;
     }catch(e){
-      toast('Czułość: ' + (e.message || e));
+      toast(t('toast.sens_err', {msg: e.message || e}));
     }
   }, 180);
 }
@@ -1516,6 +1687,13 @@ if($('audioOn')) $('audioOn').onclick = () => setAudioRemote(true);
 if($('audioOff')) $('audioOff').onclick = () => setAudioRemote(false);
 if(audioSens) audioSens.addEventListener('input', scheduleAudioParams);
 if(audioGain) audioGain.addEventListener('input', scheduleAudioParams);
+if(audioBands) audioBands.addEventListener('change', scheduleAudioParams);
+if(audioBassGain) audioBassGain.addEventListener('input', scheduleAudioParams);
+if(audioTrebleGain) audioTrebleGain.addEventListener('input', scheduleAudioParams);
+if(audioBassVib) audioBassVib.addEventListener('change', scheduleAudioParams);
+if(audioBassPump) audioBassPump.addEventListener('change', scheduleAudioParams);
+if(audioTrebleVib) audioTrebleVib.addEventListener('change', scheduleAudioParams);
+if(audioTreblePump) audioTreblePump.addEventListener('change', scheduleAudioParams);
 
 async function refresh(){
   if(!joined || !SESSION_ID){
@@ -1542,27 +1720,37 @@ async function refresh(){
       s.allow_audio !== false,
       s.allow_audio_params !== false,
       s.audio_sensitivity,
-      s.audio_gain
+      s.audio_gain,
+      s.audio_bands_enabled,
+      s.audio_bass_gain,
+      s.audio_treble_gain,
+      {
+        bass_to_vibrate: s.audio_bass_to_vibrate,
+        bass_to_pump: s.audio_bass_to_pump,
+        treble_to_vibrate: s.audio_treble_to_vibrate,
+        treble_to_pump: s.audio_treble_to_pump
+      }
     );
     const n = s.connected_count || (s.toys||[]).length || 0;
     connPill.textContent = s.connected ? ('on·' + (n || 1)) : 'off';
     connPill.className = 'pill ' + (s.connected ? 'on' : 'off');
     if(s.session && s.session.display_name){
-      connPill.title = s.session.display_name + (canControl ? '' : ' (bez sterowania)');
+      connPill.title = s.session.display_name + (canControl ? '' : t('status.watching'));
     } else {
-      connPill.title = s.connected ? ('online · ' + n) : 'host bez zabawki';
+      connPill.title = s.connected ? ('online · ' + n) : t('status.host_no_toy');
     }
 
-    const list = (s.toys||[]).map(t => {
-      const on = t.connected;
-      const bat = t.battery != null ? t.battery + '%' : '—';
-      return `<div class="toy"><span class="dot ${on?'':'off'}"></span><span>${t.display_name||t.name||t.id}</span><span class="bat">🔋 ${bat}</span></div>`;
-    }).join('') || '<div class="toy"><span class="dot off"></span><span>Brak zabawek (lub brak uprawnień)</span></div>';
+    const list = (s.toys||[]).map(toy => {
+      const on = toy.connected;
+      const bat = toy.battery != null ? toy.battery + '%' : '—';
+      return `<div class="toy"><span class="dot ${on?'':'off'}"></span><span>${toy.display_name||toy.name||toy.id}</span><span class="bat">🔋 ${bat}</span></div>`;
+    }).join('') || '<div class="toy"><span class="dot off"></span><span>' + t('status.no_toys') + '</span></div>';
     toysEl.innerHTML = list;
+    toysEl.removeAttribute('data-i18n');
     fillToySelect(s.toys||[]);
 
     if(!canControl){
-      statusEl.textContent = 'Host wyłączył Ci sterowanie — możesz tylko oglądać';
+      statusEl.textContent = t('status.no_control_watch');
       statusEl.className = 'status-msg msg-err';
     } else if(s.message){
       statusEl.textContent = s.message;
@@ -1574,8 +1762,9 @@ async function refresh(){
     });
   }catch(e){
     if(e.code === 'kicked' || e.code === 'banned' || e.code === 'no_session') return;
-    toysEl.innerHTML = '<div class="toy"><span class="dot off"></span><span>Brak łącza z hostem</span></div>';
-    statusEl.textContent = 'Offline: ta sama Wi‑Fi / tunnel? Panel włączony? Test: /health';
+    toysEl.innerHTML = '<div class="toy"><span class="dot off"></span><span>' + t('status.no_link') + '</span></div>';
+    toysEl.removeAttribute('data-i18n');
+    statusEl.textContent = t('status.offline');
     statusEl.className = 'status-msg msg-err';
     connPill.textContent = 'off';
     connPill.className = 'pill off';
@@ -1596,6 +1785,15 @@ window.addEventListener('keydown', (e) => {
   if(e.altKey && e.key === '3') switchTab('opcje');
 });
 
+initI18n();
+document.addEventListener('lc-lang', () => {
+  const onTab = document.querySelector('.tab.on');
+  if (onTab && panelTitle) {
+    panelTitle.textContent = tabTitle(onTab.dataset.tab);
+    panelTitle.removeAttribute('data-i18n');
+  }
+  if (joined) refresh();
+});
 syncLabels();
 // start: join overlay jeśli brak sesji
 if(!SESSION_ID && !DISPLAY_NAME){

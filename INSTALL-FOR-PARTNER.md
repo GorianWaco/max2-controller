@@ -6,63 +6,42 @@ Nie wymaga telefonu (Bluetooth bezpośrednio z PC).
 
 ---
 
-## Opcja A — Flatpak (zalecane do udostępnienia)
-
-### U twórcy (zbuduj raz)
+## Jedna komenda
 
 ```bash
-cd ~/Projekty/max2-controller   # lub sklonowany katalog
-sudo pacman -S flatpak flatpak-builder   # jeśli nie ma
-./build-flatpak.sh
+curl -fsSL https://raw.githubusercontent.com/GorianWaco/max2-controller/main/install.sh | bash
 ```
 
-Powstanie plik:
+To doinstaluje GTK/BLE i wrzuci skrót do menu.
 
-`dist/LovenseController.flatpak`
-
-Wyślij go partnerce (Pendrive, Syncthing, chmura…).
-
-### U partnerki (instalacja)
+### Flatpak (łatwiej wysłać gotową paczkę)
 
 ```bash
-# Flatpak musi być zainstalowany
-sudo pacman -S flatpak          # Arch/CachyOS
-# sudo apt install flatpak      # Debian/Ubuntu
+curl -fsSL https://raw.githubusercontent.com/GorianWaco/max2-controller/main/install.sh | bash -s -- --flatpak
+```
 
-flatpak install --user LovenseController.flatpak
+Albo z GitHub Releases: pobierz `LovenseController-*.flatpak` i:
+
+```bash
+flatpak install --user LovenseController-2.0.0.flatpak
 flatpak run pl.gorian.LovenseController
 ```
 
-Albo dwuklik na pliku `.flatpak` w menedżerze plików (jeśli system to obsługuje).
-
-**Uwagi Flatpak + Bluetooth:**  
-Aplikacja ma uprawnienia do BlueZ i urządzeń. Jeśli skan BLE nic nie znajdzie:
+**Uwagi Flatpak + Bluetooth:** jeśli skan BLE nic nie znajdzie:
 
 ```bash
-# upewnij się, że Bluetooth działa poza flatpakiem
 bluetoothctl show
-# czasem pomaga:
 flatpak override --user --device=all pl.gorian.LovenseController
 ```
 
 ---
 
-## Opcja B — instalacja ze źródeł (bez Flatpaka)
+## Z katalogu źródłowego
 
 ```bash
-# 1. skopiuj cały folder projektu
-cd lovense-controller   # nazwa katalogu
-./install-local.sh
-
-# 2. uruchom
-lovense-controller
-```
-
-Zależności (Arch/CachyOS):
-
-```bash
-sudo pacman -S python-gobject gtk4 libadwaita bluez \
-  gst-plugins-good pipewire-pulse
+./install.sh                 # native + zależności
+./install.sh --flatpak       # z dist/ albo z GitHuba
+./build-flatpak.sh           # buduje dist/LovenseController-*.flatpak
 ```
 
 ---
@@ -82,17 +61,3 @@ sudo pacman -S python-gobject gtk4 libadwaita bluez \
 | Max / Max 2 | Vibrate | Pump (powietrze) |
 | Nora | Vibrate | Rotate |
 | Edge | Vibrate | Vibrate 2 |
-
-### Zdalne sterowanie (dla partnera w sieci)
-
-1. Włącz **Zdalne sterowanie** w programie.
-2. **Kopiuj link** i wyślij (w domu = sieć Wi‑Fi).
-3. Przez internet: `cloudflared tunnel --url http://127.0.0.1:8787` lub Tailscale.
-
----
-
-## Prywatność
-
-- Zdalny panel wymaga **tokena** (linku).
-- Można wyłączyć zdalne sterowanie w każdej chwili i wygenerować nowy token.
-- API do gier domyślnie tylko na `127.0.0.1`.

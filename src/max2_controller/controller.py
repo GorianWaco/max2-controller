@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from max2_controller.charge_bank import ChargeBank, apply_action
 from max2_controller.backends.ble_lovense import TOY_ALL, LovenseBleBackend
 from max2_controller.backends.lovense_local import LovenseLocalBackend
 from max2_controller.config import AppConfig
@@ -60,6 +61,7 @@ class Max2Controller:
         self._log_cbs: list[LogCallback] = []
         self._state_cbs: list[StateCallback] = []
         self._debounce_timer: threading.Timer | None = None
+        self._action_end_timer: threading.Timer | None = None
         self._battery_stop = threading.Event()
         self._battery_thread: threading.Thread | None = None
         self._ble: LovenseBleBackend | None = None
@@ -72,6 +74,8 @@ class Max2Controller:
         self._auto_thread: threading.Thread | None = None
         # sesje panelu partnerskiego (kto online, kick, uprawnienia do zabawek)
         self.remote_sessions = RemoteSessionManager()
+        self.charge_bank = ChargeBank()
+        self.charge_bank.load()
 
     def _make_backend(self, name: str) -> Any:
         name = (name or BACKEND_BLE).strip().lower()
@@ -172,8 +176,17 @@ class Max2Controller:
         sensitivity: float | None = None,
         gain: float | None = None,
         threshold: float | None = None,
+        bands: bool | None = None,
+        bass_gain: float | None = None,
+        treble_gain: float | None = None,
+        bass_hz: float | None = None,
+        treble_hz: float | None = None,
+        bass_to_vibrate: bool | None = None,
+        bass_to_pump: bool | None = None,
+        treble_to_vibrate: bool | None = None,
+        treble_to_pump: bool | None = None,
     ) -> CommandResult:
-        """Czułość / wzmocnienie audio (działa od razu — pętla audio czyta config na żywo)."""
+        """Czułość / wzmocnienie / pasma audio (działa od razu — pętla czyta config na żywo)."""
         parts: list[str] = []
         if sensitivity is not None:
             self.config.audio_sensitivity = max(0.3, min(3.0, float(sensitivity)))
@@ -184,6 +197,35 @@ class Max2Controller:
         if threshold is not None:
             self.config.audio_threshold = max(0.001, min(0.2, float(threshold)))
             parts.append(f"próg={self.config.audio_threshold:.3f}")
+        if bands is not None:
+            self.config.audio_bands_enabled = bool(bands)
+            parts.append("bas/treble=" + ("WŁ" if self.config.audio_bands_enabled else "WYŁ"))
+        if bass_gain is not None:
+            self.config.audio_bass_gain = max(0.2, min(4.0, float(bass_gain)))
+            parts.append(f"bas×{self.config.audio_bass_gain:.1f}")
+        if treble_gain is not None:
+            self.config.audio_treble_gain = max(0.2, min(6.0, float(treble_gain)))
+            parts.append(f"treble×{self.config.audio_treble_gain:.1f}")
+        if bass_hz is not None:
+            self.config.audio_bass_hz = max(40.0, min(600.0, float(bass_hz)))
+            parts.append(f"bas<{self.config.audio_bass_hz:.0f}Hz")
+        if treble_hz is not None:
+            self.config.audio_treble_hz = max(800.0, min(12000.0, float(treble_hz)))
+            parts.append(f"treble>{self.config.audio_treble_hz:.0f}Hz")
+        if bass_to_vibrate is not None:
+            self.config.audio_bass_to_vibrate = bool(bass_to_vibrate)
+            parts.append("bas→V=" + ("WŁ" if self.config.audio_bass_to_vibrate else "WYŁ"))
+        if bass_to_pump is not None:
+            self.config.audio_bass_to_pump = bool(bass_to_pump)
+            parts.append("bas→P=" + ("WŁ" if self.config.audio_bass_to_pump else "WYŁ"))
+        if treble_to_vibrate is not None:
+            self.config.audio_treble_to_vibrate = bool(treble_to_vibrate)
+            parts.append("treble→V=" + ("WŁ" if self.config.audio_treble_to_vibrate else "WYŁ"))
+        if treble_to_pump is not None:
+            self.config.audio_treble_to_pump = bool(treble_to_pump)
+            parts.append("treble→P=" + ("WŁ" if self.config.audio_treble_to_pump else "WYŁ"))
+        if self.config.audio_treble_hz < self.config.audio_bass_hz + 200.0:
+            self.config.audio_treble_hz = self.config.audio_bass_hz + 400.0
         if not parts:
             return self._apply_result(CommandResult(ok=False, message="Brak parametrów audio"))
         try:
@@ -374,7 +416,9 @@ class Max2Controller:
                 self.state.time_sec = max(0.0, float(time_sec))
 
             if immediate:
-                return self._send_levels(toy=toy)
+                result = self._send_levels(toy=toy)
+                self._arm_action_end(self.state.time_sec)
+                return result
 
             if self._debounce_timer:
                 self._debounce_timer.cancel()
@@ -385,9 +429,30 @@ class Max2Controller:
             self._notify()
             return None
 
+    def _cancel_action_end(self) -> None:
+        t = self._action_end_timer
+        self._action_end_timer = None
+        if t is not None:
+            t.cancel()
+
+    def _arm_action_end(self, time_sec: float) -> None:
+        self._cancel_action_end()
+        dur = float(time_sec or 0.0)
+        if dur <= 0:
+            return
+        timer = threading.Timer(dur + 0.08, self._on_action_end)
+        timer.daemon = True
+        self._action_end_timer = timer
+        timer.start()
+
+    def _on_action_end(self) -> None:
+        self._action_end_timer = None
+        self.stop()
+
     def _flush_debounce(self) -> None:
         with self._lock:
             self._send_levels()
+            self._arm_action_end(self.state.time_sec)
 
     def _send_levels(self, toy: str | None = None) -> CommandResult:
         toy_id = self._target_toy_id(toy)
@@ -403,14 +468,41 @@ class Max2Controller:
         with self._lock:
             if self._debounce_timer:
                 self._debounce_timer.cancel()
-            return self._send_levels()
+            result = self._send_levels()
+            self._arm_action_end(self.state.time_sec)
+            return result
+
+    def replay_charge(self) -> CommandResult:
+        msg = self.charge_bank.start_replay(
+            lambda pend: apply_action(self, pend),
+            lambda: bool(self.state.connected),
+        )
+        ok = not msg.startswith("podłącz") and "pusta" not in msg and "już" not in msg
+        self.log("Energia: " + msg)
+        return self._apply_result(CommandResult(ok=ok, message=msg))
+
+    def clear_charge(self) -> CommandResult:
+        self.charge_bank.clear()
+        self.log("Energia: kolejka wyczyszczona")
+        self._notify()
+        return self._apply_result(CommandResult(ok=True, message="Kolejka energii wyczyszczona"))
+
+    def bank_sl_action(self, pend: dict) -> int:
+        n = self.charge_bank.enqueue(pend)
+        e = self.charge_bank.energy
+        self.log(f"Energia: zapisano wibrację ({n} w kolejce, {e}%)")
+        self._notify()
+        return n
 
     def stop(self, toy: str | None = None) -> CommandResult:
+        self.charge_bank.stop_replay()
         with self._lock:
             if self._debounce_timer:
                 self._debounce_timer.cancel()
+            self._cancel_action_end()
             self.state.vibrate = 0
             self.state.pump = 0
+            self.state.time_sec = 0.0
             toy_id = self._target_toy_id(toy)
             result = self.backend.stop(toy=toy_id)
             return self._apply_result(result, "STOP")
@@ -427,6 +519,7 @@ class Max2Controller:
                 t = float(PRESET_DEFAULT_SEC.get(name, 10.0))
             toy_id = self._target_toy_id(toy)
             result = self.backend.preset(name, time_sec=t, toy=toy_id)
+            self._arm_action_end(t)
             return self._apply_result(result, f"Preset: {name} ({t:.0f}s)")
 
     # --- tryby automatyczne ---
@@ -600,6 +693,7 @@ class Max2Controller:
                 interval_ms=interval_ms,
                 features=features,
             )
+            self._arm_action_end(t)
             return self._apply_result(result, f"Pattern [{interval_ms}ms]: {strength_str} ({t}s)")
 
     def refresh_battery(self) -> int | None:
@@ -746,7 +840,21 @@ class Max2Controller:
                 "audio_sensitivity": float(getattr(self.config, "audio_sensitivity", 1.4)),
                 "audio_gain": float(getattr(self.config, "audio_gain", 10.0)),
                 "audio_threshold": float(getattr(self.config, "audio_threshold", 0.015)),
+                "audio_bands_enabled": bool(getattr(self.config, "audio_bands_enabled", True)),
+                "audio_bass_gain": float(getattr(self.config, "audio_bass_gain", 1.0)),
+                "audio_treble_gain": float(getattr(self.config, "audio_treble_gain", 1.8)),
+                "audio_bass_hz": float(getattr(self.config, "audio_bass_hz", 250.0)),
+                "audio_treble_hz": float(getattr(self.config, "audio_treble_hz", 2000.0)),
+                "audio_bass_to_vibrate": bool(getattr(self.config, "audio_bass_to_vibrate", True)),
+                "audio_bass_to_pump": bool(getattr(self.config, "audio_bass_to_pump", False)),
+                "audio_treble_to_vibrate": bool(
+                    getattr(self.config, "audio_treble_to_vibrate", False)
+                ),
+                "audio_treble_to_pump": bool(getattr(self.config, "audio_treble_to_pump", True)),
                 "remote_sessions": rs,
+                "energy": self.charge_bank.energy,
+                "bank": self.charge_bank.count,
+                "energy_playing": self.charge_bank.playing,
                 "toys": [
                     {
                         "id": t.id,
