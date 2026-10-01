@@ -36,6 +36,50 @@ def normalize_sl_url(raw: str) -> str:
     return u.rstrip("/")
 
 
+class CapGone(Exception):
+    """The capability URL itself is dead (region change, script reset)."""
+
+
+def sl_object_request_url(base: str, token: str) -> str:
+    """Path + query. Kept for callers; the bridge tries several shapes."""
+    targets = sl_request_targets(base, token, post=False)
+    for url in targets:
+        if "/t/" in url and "token=" in url:
+            return url
+    return targets[0] if targets else ""
+
+
+def sl_request_targets(base: str, token: str, *, post: bool) -> list[str]:
+    """
+    Cloud sims drop query strings, custom headers, or extra path — not always
+    the same one. Try each shape. POST prefers the cap root because the token
+    rides in the JSON body (that part is not stripped).
+    A query string must sit behind a slash or SL returns HTTP 500.
+    """
+    base = normalize_sl_url(base)
+    if not base:
+        return []
+    tok = quote(token or "", safe="")
+    root = base + "/"
+    if not tok:
+        return [root]
+    path = f"{base}/t/{tok}"
+    query = f"{base}/?token={tok}"
+    both = f"{path}?token={tok}"
+    ordered = [root, path, both, query] if post else [path, query, both, root]
+    out: list[str] = []
+    for url in ordered:
+        if url not in out:
+            out.append(url)
+    return out
+
+
+def _is_cap_root(base: str, url: str) -> bool:
+    root = normalize_sl_url(base).rstrip("/")
+    path = url.split("?", 1)[0].rstrip("/")
+    return bool(root) and path == root
+
+
 class SlObjectBridge:
     def __init__(self, controller: "Max2Controller") -> None:
         self.controller = controller
@@ -45,6 +89,10 @@ class SlObjectBridge:
         self.url = ""
         self.ok = False
         self.last_error = ""
+        self._auth_fail = 0
+        self._preferred_url = ""
+        self._poll_via_post = False
+        self._old_script = False
 
     @property
     def running(self) -> bool:
@@ -59,6 +107,10 @@ class SlObjectBridge:
         self.url = url
         self.ok = False
         self.last_error = ""
+        self._auth_fail = 0
+        self._preferred_url = ""
+        self._poll_via_post = False
+        self._old_script = False
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="sl-object-bridge", daemon=True)
         self._thread.start()
@@ -74,18 +126,28 @@ class SlObjectBridge:
     def _token(self) -> str:
         return str(getattr(self.controller.config, "remote_token", "") or "")
 
-    def _req(self, method: str, body: dict | None = None) -> dict:
-        tok = quote(self._token(), safe="")
-        url = f"{self.url}/?token={tok}"
+    def _targets(self, method: str) -> list[str]:
+        post = method.upper() == "POST"
+        targets = sl_request_targets(self.url, self._token(), post=post)
+        pref = self._preferred_url
+        if pref and pref in targets:
+            targets = [pref] + [u for u in targets if u != pref]
+        elif pref:
+            targets = [pref] + targets
+        return targets
+
+    def _http(self, method: str, url: str, body: dict | None) -> dict:
+        tok = self._token()
         data = None
         headers = {
             "Accept": "application/json",
-            "X-API-Token": self._token(),
+            "X-API-Token": tok,
             "User-Agent": "LovenseController/1.9 (sl-bridge)",
         }
+        # GET must not have a body: SL HTTP-in may then treat it as POST and skip pending.
         if body is not None:
             payload = dict(body)
-            payload["token"] = self._token()
+            payload["token"] = tok
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -98,6 +160,36 @@ class SlObjectBridge:
         if not isinstance(out, dict):
             return {"ok": False, "error": "bad json"}
         return out
+
+    def _req(self, method: str, body: dict | None = None) -> dict:
+        """Try each URL shape. 404 on the cap root means the object URL died."""
+        last: urllib.error.HTTPError | None = None
+        saw_auth = False
+        for url in self._targets(method):
+            try:
+                data = self._http(method, url, body)
+            except urllib.error.HTTPError as e:
+                if e.code == 404 and _is_cap_root(self.url, url):
+                    raise CapGone(url) from e
+                if e.code == 404:
+                    if self._preferred_url == url:
+                        self._preferred_url = ""
+                    continue
+                if e.code == 401:
+                    saw_auth = True
+                    last = e
+                    continue
+                if e.code in (405, 500, 502, 503):
+                    last = e
+                    continue
+                raise
+            self._preferred_url = url
+            return data
+        if saw_auth and last is not None:
+            raise last
+        if last is not None:
+            raise last
+        raise urllib.error.URLError("SL: obiekt nie odpowiedział")
 
     def _apply_pending(self, pend: dict) -> None:
         action = str(pend.get("action") or "").lower()
@@ -158,13 +250,45 @@ class SlObjectBridge:
             },
         )
 
+    def _poll(self) -> dict:
+        """
+        GET carries the token in the path or ?token=.
+        If every GET is 401, POST {"op":"poll"} — the body survives when the
+        sim strips the query string and custom headers.
+        """
+        if self._poll_via_post:
+            data = self._req("POST", {"op": "poll"})
+            if "pending" not in data:
+                self._poll_via_post = False
+                raise RuntimeError(
+                    "SL: kula ma stary skrypt (nie oddaje komend). "
+                    "Zdalne → Kopiuj skrypt SL, wklej do kuli, klik URL, Połącz."
+                )
+            return data
+        try:
+            return self._req("GET", None)
+        except urllib.error.HTTPError as e:
+            if e.code != 401 or self._old_script:
+                raise
+            data = self._req("POST", {"op": "poll"})
+            if "pending" not in data:
+                self._old_script = True
+                raise RuntimeError(
+                    "SL: kula ma stary skrypt (nie oddaje komend). "
+                    "Zdalne → Kopiuj skrypt SL, wklej do kuli, klik URL, Połącz."
+                )
+            self._poll_via_post = True
+            self.controller.log("SL: token idzie w treści POST (sim ucina query/nagłówki)")
+            return data
+
     def _loop(self) -> None:
         self.controller.log("SL: łączę z obiektem (bez tunelu)…")
         while not self._stop.wait(0.45):
             try:
-                data = self._req("GET")
+                data = self._poll()
                 self.ok = True
                 self.last_error = ""
+                self._auth_fail = 0
                 pend = data.get("pending")
                 if isinstance(pend, dict) and pend.get("action"):
                     try:
@@ -175,12 +299,24 @@ class SlObjectBridge:
                     self._push_state()
                 except Exception:
                     logger.exception("SL push state failed")
+            except CapGone:
+                self.ok = False
+                self.last_error = (
+                    "URL wygasł — klik kuli → URL, wklej nowy PAIR URL i Połącz"
+                )
+                self.controller.log("SL: " + self.last_error)
+                return
             except urllib.error.HTTPError as e:
                 self.ok = False
                 self.last_error = f"HTTP {e.code}"
-                if e.code == 404:
-                    self.controller.log("SL: URL wygasł — załóż obiekt ponownie i wklej nowy PAIR URL")
-                    return
+                if e.code == 401:
+                    self._auth_fail += 1
+                    if self._auth_fail in (1, 6, 20):
+                        self.controller.log(
+                            "SL: HTTP 401 (stary token w kuli). "
+                            "Klik kuli → URL, wklej PAIR URL, Połącz. "
+                            "Albo Zdalne → Kopiuj skrypt SL i wklej do kuli raz."
+                        )
             except Exception as e:
                 self.ok = False
                 self.last_error = str(e)

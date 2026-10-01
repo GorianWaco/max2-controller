@@ -123,9 +123,13 @@ SaveCfg()
 
 LoadCfg()
 {
-    string t = llLinksetDataRead("lv.token");
-    if (!TokenLooksOk(t)) t = llLinksetDataRead("lv.tok");
-    if (TokenLooksOk(t)) TOKEN = t;
+    string stored = llLinksetDataRead("lv.token");
+    if (!TokenLooksOk(stored)) stored = llLinksetDataRead("lv.tok");
+    // A newly pasted script (TOKEN baked from the GUI) beats stale linkset data.
+    if (TokenLooksOk(TOKEN) && TOKEN != stored)
+        SaveCfg();
+    else if (TokenLooksOk(stored))
+        TOKEN = stored;
     if (llLinksetDataRead("lv.ok") != "1")
     {
         if (!TokenMissing()) SaveCfg();
@@ -161,26 +165,65 @@ vector HoverColor()
     return <(float)llList2String(p, 0), (float)llList2String(p, 1), (float)llList2String(p, 2)>;
 }
 
-integer TokenOk(key id, string body)
+string PathToken(key id)
 {
-    if (TokenMissing()) return TRUE;
+    string path = llGetHTTPHeader(id, "x-path-info");
+    if (path == "") return "";
+    integer q = llSubStringIndex(path, "?");
+    if (q >= 0) path = llGetSubString(path, 0, q - 1);
+    if (llGetSubString(path, 0, 0) == "/") path = llGetSubString(path, 1, -1);
+    if (path == "" || path == "/") return "";
+    if (llToLower(llGetSubString(path, 0, 1)) == "t/")
+        path = llGetSubString(path, 2, -1);
+    else
+        return "";
+    path = llUnescapeURL(path);
+    if (llStringLength(path) >= 8) return path;
+    return "";
+}
+
+string QueryToken(key id)
+{
     string qs = llGetHTTPHeader(id, "x-query-string");
-    string qtok = "";
     integer p = llSubStringIndex(llToLower(qs), "token=");
-    if (p >= 0)
-    {
-        qtok = llGetSubString(qs, p + 6, -1);
-        integer a = llSubStringIndex(qtok, "&");
-        if (a >= 0) qtok = llGetSubString(qtok, 0, a - 1);
-    }
-    string htok = llGetHTTPHeader(id, "x-api-token");
-    string btok = "";
+    if (p < 0) return "";
+    string qtok = llGetSubString(qs, p + 6, -1);
+    integer a = llSubStringIndex(qtok, "&");
+    if (a >= 0) qtok = llGetSubString(qtok, 0, a - 1);
+    return llUnescapeURL(qtok);
+}
+
+string IncomingToken(key id, string body)
+{
+    string t = PathToken(id);
+    if (t != "") return t;
+    string h = llGetHTTPHeader(id, "x-api-token");
+    if (h != "") return h;
+    string q = QueryToken(id);
+    if (q != "") return q;
     if (body != "")
     {
         string j = llJsonGetValue(body, ["token"]);
-        if (j != JSON_INVALID) btok = j;
+        if (j != JSON_INVALID && j != "") return j;
     }
-    if (qtok == TOKEN || htok == TOKEN || btok == TOKEN) return TRUE;
+    return "";
+}
+
+integer TokenOk(key id, string body)
+{
+    // The cap URL is already unguessable. A stale linkset token must not 401
+    // the PC that is actually calling this object.
+    string incoming = IncomingToken(id, body);
+    if (TokenLooksOk(incoming) && llStringLength(incoming) >= 8)
+    {
+        if (incoming != TOKEN)
+        {
+            TOKEN = incoming;
+            SaveCfg();
+        }
+        return TRUE;
+    }
+    if (TokenMissing()) return TRUE;
     return FALSE;
 }
 
@@ -751,6 +794,27 @@ integer ReadNote()
     return TRUE;
 }
 
+ReplyPoll(key id)
+{
+    gPaired = TRUE;
+    string pend;
+    string q = llLinksetDataRead("lv.bank");
+    if (q != "" && gPend != "clearbank")
+    {
+        pend = "{\"action\":\"bank\",\"q\":\"" + JsonEsc(q) + "\"}";
+        llLinksetDataWrite("lv.bank", "");
+        llLinksetDataWrite("lv.bankn", "0");
+        llMessageLinked(LINK_SET, 0xC07E, "EN|flush", NULL_KEY);
+    }
+    else
+    {
+        pend = PendJson();
+        gPend = "";
+    }
+    llHTTPResponse(id, 200,
+        "{\"ok\":true,\"service\":\"lovense-sl\",\"pending\":" + pend + "}");
+}
+
 TryAttach()
 {
     integer a = llGetAttached();
@@ -984,6 +1048,14 @@ default
         method = llToUpper(method);
         if (method == "POST")
         {
+            string op = "";
+            if (body != "") op = llJsonGetValue(body, ["op"]);
+            // Poll: token is in the body when the sim drops query and headers.
+            if (op == "poll")
+            {
+                ReplyPoll(id);
+                return;
+            }
             string c = llJsonGetValue(body, ["connected"]);
             gConnected = (llToLower(c) == "true" || c == "1");
             string n = llJsonGetValue(body, ["connected_count"]);
@@ -1007,22 +1079,6 @@ default
             return;
         }
         // GET — PC is talking to us
-        gPaired = TRUE;
-        string pend;
-        string q = llLinksetDataRead("lv.bank");
-        if (q != "" && gPend != "clearbank")
-        {
-            pend = "{\"action\":\"bank\",\"q\":\"" + JsonEsc(q) + "\"}";
-            llLinksetDataWrite("lv.bank", "");
-            llLinksetDataWrite("lv.bankn", "0");
-            llMessageLinked(LINK_SET, 0xC07E, "EN|flush", NULL_KEY);
-        }
-        else
-        {
-            pend = PendJson();
-            gPend = "";
-        }
-        llHTTPResponse(id, 200,
-            "{\"ok\":true,\"service\":\"lovense-sl\",\"pending\":" + pend + "}");
+        ReplyPoll(id);
     }
 }

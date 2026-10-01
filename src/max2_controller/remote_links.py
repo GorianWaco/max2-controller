@@ -105,12 +105,9 @@ class RemoteLinks:
             f"  LAN:  {self.sl_base_lan}\n"
             f"  test: {self.sl_base_local}\n"
             f"  przykład: {self.sl_example}\n\n"
-            f"Przez internet (spoza domu / z gridu SL):\n"
-            f"  1) W terminalu:  cloudflared tunnel --url http://127.0.0.1:{self.port}\n"
-            f"     albo:        ngrok http {self.port}\n"
-            f"  2) Do https://… doklej:  /r/{self.token}  (panel)\n"
-            f"     albo baza SL:         https://….trycloudflare.com\n"
-            f"     skrypt: /sl/vibrate?token=…&level=10\n"
+            f"Przez internet (panel w przeglądarce):\n"
+            f"  W programie: Cloudflare Quick, Cloudflare Token albo SSH localhost.run.\n"
+            f"  Do https://… doklej:  /r/{self.token}\n"
         )
 
 

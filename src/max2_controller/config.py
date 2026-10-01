@@ -67,9 +67,8 @@ class AppConfig:
     remote_max_vibrate: int = 20
     remote_max_pump: int = 3
 
-    # Cloudflare Tunnel — udostępnianie przez internet
-    # quick = losowy trycloudflare (zmienia się); named = stały hostname; token = token z Zero Trust
-    tunnel_mode: str = "quick"  # quick | named | token
+    # Tunel panelu w przeglądarce: quick | token | ssh
+    tunnel_mode: str = "quick"
     tunnel_name: str = "lovense-controller"
     tunnel_hostname: str = ""  # np. lovense.twojadomena.com (named)
     tunnel_token: str = ""  # token z Cloudflare Zero Trust (token mode)
@@ -116,6 +115,7 @@ class AppConfig:
     audio_mode: str = "playback"
     audio_sink: str = ""
     audio_source: str = ""
+    audio_app: str = ""  # „Nazwa aplikacji<TAB>nazwa strumienia”
     audio_gain: float = 10.0
     audio_sensitivity: float = 1.4
     audio_threshold: float = 0.015
@@ -259,6 +259,8 @@ class AppConfig:
         # Usuń stare pola jeśli wcisnęły się przez pomyłkę (nie są w dataclass)
         # clamp sensownych wartości
         cfg = cls(**{k: v for k, v in filtered.items() if k in known})
+        if (cfg.tunnel_mode or "").lower() not in ("quick", "token", "ssh"):
+            cfg.tunnel_mode = "quick"
         cfg.audio_bass_hz = max(40.0, min(600.0, float(cfg.audio_bass_hz or 250.0)))
         cfg.audio_treble_hz = max(800.0, min(12000.0, float(cfg.audio_treble_hz or 2000.0)))
         if cfg.audio_treble_hz < cfg.audio_bass_hz + 200.0:

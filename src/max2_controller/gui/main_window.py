@@ -468,7 +468,7 @@ class MainWindow:
         self.remote_info_var.set(
             f"LAN: {link}\n"
             f"Token: {self.config.remote_token}\n"
-            f"Na internet: cloudflared tunnel / ngrok / tailscale → port {self.config.remote_port}"
+            f"Na internet: Cloudflare Quick, Token albo SSH localhost.run → port {self.config.remote_port}"
         )
         self.controller.log("Zdalne sterowanie WŁĄCZONE — udostępniaj link tylko zaufanym osobom")
 
@@ -487,7 +487,7 @@ class MainWindow:
                 "Zdalne sterowanie",
                 "Włączasz panel web, z którego inni mogą sterować zabawką.\n\n"
                 "W sieci LAN link zadziała od razu.\n"
-                "Przez internet użyj tunnel (cloudflared/ngrok) lub VPN (Tailscale).\n\n"
+                "Przez internet: Cloudflare Quick, Token albo SSH localhost.run.\n\n"
                 "Kontynuować?",
             ):
                 self.remote_var.set(False)

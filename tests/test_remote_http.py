@@ -391,6 +391,26 @@ def test_lsl_wearable_is_public_control() -> None:
     assert normalize_sl_url(
         "https://simhost-abc.agni.secondlife.io 12043/cap/37502878-2956-22fb-2d6b-94bc33e4fe80"
     ) == "https://simhost-abc.agni.secondlife.io:12043/cap/37502878-2956-22fb-2d6b-94bc33e4fe80"
+    from max2_controller.secondlife.bridge import sl_object_request_url
+
+    cap = "https://simhost-abc.agni.secondlife.io:12043/cap/37502878-2956-22fb-2d6b-94bc33e4fe80"
+    got = sl_object_request_url(cap, "T7FpYQtest")
+    assert got.startswith(cap + "/t/T7FpYQtest")
+    assert "token=T7FpYQtest" in got
+    assert "/?token=" not in sl_object_request_url(cap, "abc")
+    assert "x-path-info" in script
+    assert "PathToken" in script
+    assert "IncomingToken" in script
+    assert "op == \"poll\"" in script
+    assert "ReplyPoll" in script
+    assert "if (incoming != TOKEN)" in script
+    from max2_controller.secondlife.bridge import sl_request_targets
+
+    gets = sl_request_targets(cap, "T7FpYQtest", post=False)
+    assert gets[0] == cap + "/t/T7FpYQtest"
+    assert cap + "/?token=T7FpYQtest" in gets
+    posts = sl_request_targets(cap, "T7FpYQtest", post=True)
+    assert posts[0] == cap + "/"
 
 
 def test_lsl_look_is_separate() -> None:

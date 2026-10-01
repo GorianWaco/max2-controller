@@ -51,8 +51,8 @@ Wymagania Linux: działający adapter BLE (`hci0`), użytkownik w grupie uprawni
 Zabawkę trzyma **oficjalna apka na Androidzie**. Program na PC steruje nią po Wi‑Fi (Game Mode).
 
 1. Telefon i PC w tej samej sieci Wi‑Fi.
-2. Lovense Remote → zabawka połączona → **Game Mode** (IP + port na ekranie).
-3. W programie: **Jak łączyć → Telefon (Lovense Remote)** → wpisz IP i port → **Połącz z telefonem**.
+2. Lovense Remote → **Discover → Game Mode** → włącz **LAN** (na ekranie jest IP i port).
+3. W programie: **Jak łączyć → Telefon (Lovense Remote)** → **Znajdź i połącz**. Program sam szuka telefonu w domowym Wi-Fi. Gdy sieć gościnna blokuje szukanie, wpisz IP i port z ekranu telefonu i naciśnij **Połącz z wpisanym IP**.
 4. **Test połączenia** powinien pokazać zabawkę.
 
 Gdy w PC nie ma adaptera BLE, ten tryb wybiera się sam.
@@ -80,6 +80,16 @@ cd ~/Projekty/max2-controller
 ./install.sh
 lovense-controller
 ```
+
+### Świeży CachyOS albo inny Linux
+
+`./install.sh` doinstalowuje to, czego brakuje: GTK, Bluetooth, PipeWire (`pw-record` jest w pakiecie `pipewire-audio`) i GStreamer. Przy pierwszym uruchomieniu program sam sprawdza braki i pyta o hasło raz. Później to samo:
+
+```bash
+lovense-controller --setup
+```
+
+CachyOS i Arch idą przez `pacman`. Debian, Ubuntu i Fedora przez `apt` albo `dnf`.
 
 ### Zbuduj Flatpak
 
@@ -236,13 +246,8 @@ bash examples/curl_cheatsheet.sh
 3. **Przez internet** wystaw port bezpiecznie, np.:
 
 ```bash
-# Cloudflare Tunnel (polecane)
-cloudflared tunnel --url http://127.0.0.1:8787
-
-# albo ngrok
-ngrok http 8787
-
-# albo Tailscale — daj drugiej osobie IP 100.x i port 8787
+# w programie: Tunel internetowy → Cloudflare Quick
+# albo SSH localhost.run, albo Cloudflare Token
 ```
 
 4. Wyślij **link z tokenem** tylko zaufanej osobie.
@@ -259,12 +264,11 @@ ngrok http 8787
 
 Grid SL **nie widzi** `127.0.0.1` ani `192.168.x` — skrypt woła publiczny HTTPS (`/sl/*`).
 
-**Ważne:** Quick Cloudflare (`*.trycloudflare.com`) często **blokuje LSL** (Bot Fight / challenge).
-Przeglądarka wtedy działa, HUD w SL dostaje 403. Do HUD użyj **ngrok**, **Tailscale Funnel**
-albo **Named tunnel** z wyłączonym Bot Fight.
+Kula w Second Life **nie używa tunelu**. Łączy się przez PAIR URL (program odpytuje obiekt).
+Tunel (Quick, Token albo SSH) jest tylko dla panelu partnerki w przeglądarce.
 
-1. Włącz **panel web** w GUI (albo zostaw auto-start panelu + tunelu).
-2. **Udostępnij przez internet** — tryb ngrok / Funnel (nie samo LAN).
+1. Włącz **panel web** w GUI (albo zostaw auto-start panelu).
+2. Do partnerki w przeglądarce: **Udostępnij** i tryb **Cloudflare Quick** albo **SSH**.
 3. Sekcja **Zdalne** → **„Kopiuj skrypt SL”**.
 4. W SL: box → wklej → Wear na głowę (cube sam staje się magicznym orbem). Klik kuli → **URL** → wklej PAIR URL w programie → **Połącz**.
    Bez tunelu: to PC odpytuje obiekt. Klik kuli = menu. Gdy zabawka chodzi, orb tryska particle.
@@ -335,7 +339,7 @@ max2-controller/
 | Hotkeys nie działają | Wayland/X11 permissions; wyłącz w configu |
 | Remote nie działa z internetu | Firewall + tunnel; w LAN sprawdź IP i port 8787 |
 | HUD SL offline / HTTP 0 / 499 | BASE_URL jest `192.168` albo `127.0.0.1` — grid tego nie widzi. Włącz tunel HTTPS i skopiuj skrypt ponownie |
-| HUD SL HTTP 403, przeglądarka OK | Cloudflare Bot Fight. Zmień tunel na ngrok / Tailscale Funnel / Named (wyłącz Bot Fight) |
+| HUD SL HTTP 403, przeglądarka OK | Tunel Cloudflare bywa blokowany przez SL. Kula ma iść przez PAIR URL, nie przez tunel |
 | Panel w przeglądarce „nie łączy” | Panel web musi być WŁ; stary link `trycloudflare` umiera po restarcie — nowy „Udostępnij” |
 | Po reinstalacji Linuksa nic nie słucha | Auto-start panelu+tunelu, albo włącz przełącznik Zdalne. Test: `http://127.0.0.1:8787/health` |
 

@@ -7,22 +7,10 @@ cd "$ROOT"
 APP_ID="pl.gorian.LovenseController"
 ICON_SRC_SVG="$ROOT/flatpak/icons/hicolor/scalable/apps/${APP_ID}.svg"
 
-echo "==> Zależności systemowe (GTK, BLE, dźwięk)"
+echo "==> Zależności systemowe (GTK, Bluetooth, dźwięk)"
 if [[ "${NO_DEPS:-0}" != "1" ]]; then
-  if command -v pacman >/dev/null; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      pacman -S --needed --noconfirm python python-pip python-gobject gtk4 libadwaita bluez gst-plugins-good pipewire python-cairo
-    elif command -v sudo >/dev/null 2>&1; then
-      sudo pacman -S --needed --noconfirm python python-pip python-gobject gtk4 libadwaita bluez gst-plugins-good pipewire python-cairo
-    else
-      echo "Upewnij się, że masz: python-gobject gtk4 libadwaita bluez gst-plugins-good"
-    fi
-  elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -y
-    sudo apt-get install -y python3 python3-pip python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 bluez gstreamer1.0-plugins-good pipewire
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y python3 python3-pip python3-gobject gtk4 libadwaita bluez gstreamer1-plugins-good pipewire python3-cairo
-  fi
+  PYTHONPATH="${ROOT}/src${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m max2_controller.setup_check --apply-system
 fi
 
 echo "==> venv + pip"
@@ -159,9 +147,9 @@ if [[ -n "${FISH_VERSION:-}" ]] || [[ "${SHELL:-}" == *fish ]]; then
   fi
 fi
 echo
-echo "Second Life HUD: grid nie widzi 192.168 — w programie włącz panel web"
-echo "i „Udostępnij przez internet” (ngrok / Tailscale Funnel; Quick Cloudflare"
-echo "często blokuje LSL). Potem „Kopiuj skrypt SL” (obiekt na awatarze)."
+echo "Second Life: w programie wklej PAIR URL z kuli (menu URL) i naciśnij Połącz."
+echo "Panel w przeglądarce: Cloudflare Quick, Cloudflare Token albo SSH."
+echo "Kula w Second Life tunelu nie używa."
 echo
 echo "Dla partnerki na innym PC — lepiej Flatpak:"
 echo "  ./build-flatpak.sh"

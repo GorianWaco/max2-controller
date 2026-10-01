@@ -71,24 +71,28 @@ source_dir() {
   return 1
 }
 
-install_system_deps() {
-  [[ "$NO_DEPS" -eq 1 ]] && return 0
-  info "Zależności: GTK4, BLE, dźwięk, Python"
+ensure_python() {
+  command -v python3 >/dev/null 2>&1 && return 0
+  info "Instaluję Pythona"
   if command -v pacman >/dev/null 2>&1; then
-    sudo_cmd pacman -S --needed --noconfirm \
-      python python-pip python-gobject gtk4 libadwaita bluez \
-      gst-plugins-good pipewire pipewire-pulse python-cairo
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo_cmd dnf install -y python3 python3-pip python3-gobject gtk4 libadwaita \
-      bluez gstreamer1-plugins-good pipewire python3-cairo
+    sudo_cmd pacman -S --needed --noconfirm python
   elif command -v apt-get >/dev/null 2>&1; then
     sudo_cmd apt-get update -y
-    sudo_cmd apt-get install -y python3 python3-pip python3-gi python3-gi-cairo \
-      gir1.2-gtk-4.0 gir1.2-adw-1 bluez gstreamer1.0-plugins-good pipewire \
-      python3-venv
+    sudo_cmd apt-get install -y python3
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo_cmd dnf install -y python3
   else
-    echo "! Nie znam dystrybucji. Doinstaluj: python3-gobject gtk4 libadwaita bluez"
+    die "Zainstaluj python3 i uruchom instalator jeszcze raz."
   fi
+}
+
+apply_system_deps() {
+  local src="$1"
+  [[ "$NO_DEPS" -eq 1 ]] && return 0
+  ensure_python
+  info "Zależności systemowe (GTK, Bluetooth, dźwięk)"
+  PYTHONPATH="${src}/src${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m max2_controller.setup_check --apply-system
 }
 
 fetch_sources() {
@@ -188,7 +192,7 @@ install_flatpak() {
 install_native() {
   local src
   src="$(fetch_sources)"
-  install_system_deps
+  apply_system_deps "$src"
   NO_DEPS=1 "$src/install-local.sh"
 }
 

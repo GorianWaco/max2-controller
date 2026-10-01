@@ -13,11 +13,11 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk  # noqa: E402
 
 from max2_controller.audio_react import (
+    AudioApp,
+    AudioEndpoint,
     AudioReactor,
-    default_sink_name,
-    default_source_name,
-    list_input_sources,
-    list_playback_sinks,
+    endpoint_labels,
+    scan_audio_devices,
 )
 from max2_controller.hotkey_defs import (
     GROUP_LABELS,
@@ -277,8 +277,8 @@ class Max2GtkApp(_AppBase):
         self._phone_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         phone_hint = Gtk.Label(
             label=(
-                "Zabawkę trzyma telefon. PC i telefon w tej samej Wi‑Fi.\n"
-                "Lovense Remote → Game Mode — przepisujesz IP i port z ekranu."
+                "Zabawkę trzyma telefon. W Lovense Remote: Discover → Game Mode → włącz LAN.\n"
+                "Potem tutaj: Znajdź i połącz. PC i telefon w tym samym Wi-Fi, VPN wyłączony."
             ),
             wrap=True,
             xalign=0,
@@ -289,11 +289,13 @@ class Max2GtkApp(_AppBase):
         from max2_controller.backends.lovense_local import parse_phone_api_url
 
         saved_ip, saved_port = parse_phone_api_url(self.config.lovense_url)
+        if saved_ip in {"127.0.0.1", "localhost"}:
+            saved_ip = ""
 
         ip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         ip_row.append(Gtk.Label(label="IP telefonu:", xalign=0))
         self.phone_ip_entry = Gtk.Entry()
-        self.phone_ip_entry.set_placeholder_text("192.168.0.15")
+        self.phone_ip_entry.set_placeholder_text("zostaw puste — program sam znajdzie")
         self.phone_ip_entry.set_text(saved_ip)
         self.phone_ip_entry.set_hexpand(True)
         ip_row.append(self.phone_ip_entry)
@@ -309,17 +311,20 @@ class Max2GtkApp(_AppBase):
         self._phone_box.append(port_row)
 
         self.url_entry = Gtk.Entry()
-        self.url_entry.set_text(self.config.lovense_url)
+        self.url_entry.set_text("" if not saved_ip else self.config.lovense_url)
         self.url_entry.set_placeholder_text("https://192-168-0-15.lovense.club:30010/command")
         self.url_entry.set_hexpand(True)
         self._phone_box.append(self.url_entry)
 
         phone_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        apply_phone = Gtk.Button(label="Połącz z telefonem")
-        apply_phone.add_css_class("suggested-action")
+        find_phone = Gtk.Button(label="Znajdź i połącz")
+        find_phone.add_css_class("suggested-action")
+        find_phone.connect("clicked", lambda *_: self._find_phone())
+        phone_btns.append(find_phone)
+        apply_phone = Gtk.Button(label="Połącz z wpisanym IP")
         apply_phone.connect("clicked", lambda *_: self._apply_phone_backend())
         phone_btns.append(apply_phone)
-        test_phone = Gtk.Button(label="Test połączenia")
+        test_phone = Gtk.Button(label="Test")
         test_phone.connect("clicked", lambda *_: self._test_phone_api())
         phone_btns.append(test_phone)
         self._phone_box.append(phone_btns)
@@ -570,13 +575,18 @@ class Max2GtkApp(_AppBase):
 
         mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         mode_row.append(Gtk.Label(label="Źródło:"))
+        self._audio_mode_ids = ("playback", "application", "microphone")
         self.audio_mode_dd = Gtk.DropDown.new_from_strings(
             [
-                "Aplikacje (Firefox, gry, YouTube…)",
+                "Całe wyjście (wszystkie aplikacje)",
+                "Jedna aplikacja",
                 "Mikrofon",
             ]
         )
-        if (self.config.audio_mode or "playback").lower() in ("mic", "microphone", "input"):
+        saved_mode = (self.config.audio_mode or "playback").lower()
+        if saved_mode in ("mic", "microphone", "input"):
+            self.audio_mode_dd.set_selected(2)
+        elif saved_mode in ("app", "application", "aplikacja"):
             self.audio_mode_dd.set_selected(1)
         else:
             self.audio_mode_dd.set_selected(0)
@@ -588,25 +598,26 @@ class Max2GtkApp(_AppBase):
         dev_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.audio_dev_lbl = Gtk.Label(label="Wyjście (głośniki):")
         dev_row.append(self.audio_dev_lbl)
-        self._sinks = list_playback_sinks() or []
-        default_sink = default_sink_name() or ""
-        if default_sink and default_sink not in self._sinks:
-            self._sinks.insert(0, default_sink)
-        if not self._sinks:
-            self._sinks = ["(domyślny systemowy)"]
-        self._sources = list_input_sources() or []
-        default_src = default_source_name() or ""
-        if default_src and default_src not in self._sources:
-            self._sources.insert(0, default_src)
-        if not self._sources:
-            self._sources = ["(domyślny mikrofon)"]
-        self.sink_dd = Gtk.DropDown.new_from_strings(self._sinks)
-        if default_sink in self._sinks:
-            self.sink_dd.set_selected(self._sinks.index(default_sink))
+        self._sink_eps: list[AudioEndpoint] = []
+        self._source_eps: list[AudioEndpoint] = []
+        self._app_eps: list[AudioApp] = []
+        self._sink_labels: list[str] = []
+        self._source_labels: list[str] = []
+        self._app_labels: list[str] = []
+        self._audio_dd_guard = False
+        self._audio_default_sink = ""
+        self._audio_default_source = ""
+        self.sink_dd = Gtk.DropDown.new_from_strings(["(szukam urządzeń…)"])
         self.sink_dd.set_hexpand(True)
         dev_row.append(self.sink_dd)
+        refresh_b = Gtk.Button(label="Odśwież")
+        refresh_b.set_tooltip_text("Odczytaj wyjścia, mikrofony i grające aplikacje")
+        refresh_b.connect("clicked", lambda *_: self._rescan_audio_devices(log=True))
+        dev_row.append(refresh_b)
         sec.append(dev_row)
-        self._refresh_audio_device_list()
+        self.sink_dd.connect("notify::selected", self._on_audio_device_selected)
+        self._rescan_audio_devices(log=False)
+        GLib.timeout_add(2000, self._poll_audio_apps)
 
         self.audio_level_lbl = Gtk.Label(label="Poziom: —  → V=0 P=0", xalign=0)
         sec.append(self.audio_level_lbl)
@@ -753,10 +764,10 @@ class Max2GtkApp(_AppBase):
 
         audio_hint = Gtk.Label(
             label=(
-                "„Aplikacje” = dźwięk z Firefoxa/gier (monitor głośników), NIE mikrofon.\n"
-                "Bas/treble: włączniki „od basu / od treble” decydują, co rusza wibracje i pump.\n"
-                "Wybierz to samo wyjście co w systemie (u Ciebie: Scarlett). "
-                "Firefox musi grać na to wyjście. Połącz BLE, potem włącz. "
+                "„Jedna aplikacja” pokazuje włączone programy (Firefox, Brave, gra), "
+                "także zanim zaczną grać. Pozycja „czeka na dźwięk” podłączy się, gdy coś odtworzysz.\n"
+                "„Całe wyjście” to wszystkie aplikacje na głośnikach. „Mikrofon” to wejście.\n"
+                "Bas/treble: włączniki „od basu / od treble” decydują, co rusza wibracje i pump. "
                 "Skrót: Ctrl+Shift+A."
             ),
             wrap=True,
@@ -918,30 +929,32 @@ class Max2GtkApp(_AppBase):
         tun_row.append(Gtk.Label(label="Tunel internetowy", hexpand=True, xalign=0))
         self.tunnel_mode_dd = Gtk.DropDown.new_from_strings(
             [
-                "Cloudflare Quick (przeglądarka OK, SL często NIE)",
-                "Cloudflare Named",
+                "Cloudflare Quick",
                 "Cloudflare Token",
-                "ngrok (dobry do SL)",
-                "Tailscale Funnel",
-                "SSH localhost.run (do SL, bez konta)",
+                "SSH localhost.run",
             ]
         )
-        mode_idx = {
-            "quick": 0,
-            "named": 1,
-            "token": 2,
-            "ngrok": 3,
-            "funnel": 4,
-            "ssh": 5,
-        }.get((self.config.tunnel_mode or "quick").lower(), 0)
+        mode_idx = {"quick": 0, "token": 1, "ssh": 2}.get(
+            (self.config.tunnel_mode or "quick").lower(), 0
+        )
         self.tunnel_mode_dd.set_selected(mode_idx)
         self.tunnel_mode_dd.set_hexpand(True)
         self.tunnel_mode_dd.connect("notify::selected", self._on_tunnel_mode_dd)
         tun_row.append(self.tunnel_mode_dd)
         sec.append(tun_row)
+
+        self.tunnel_token_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.tunnel_token_row.append(Gtk.Label(label="Token Cloudflare:"))
+        self.tunnel_token_entry = Gtk.Entry()
+        self.tunnel_token_entry.set_text(self.config.tunnel_token or "")
+        self.tunnel_token_entry.set_hexpand(True)
+        self.tunnel_token_entry.set_placeholder_text("wklej token z panelu Cloudflare")
+        self.tunnel_token_row.append(self.tunnel_token_entry)
+        sec.append(self.tunnel_token_row)
+        self._sync_tunnel_token_row()
         sec.append(
             Gtk.Label(
-                label="Obiekt w Second Life nie używa przeglądarki — Quick Cloudflare go zwykle blokuje. Wybierz SSH albo ngrok, włącz udostępnianie ponownie, potem Kopiuj skrypt SL.",
+                label="Tunel jest tylko dla panelu w przeglądarce. Kula w Second Life go nie używa.",
                 wrap=True,
                 xalign=0,
             )
@@ -1069,6 +1082,20 @@ class Max2GtkApp(_AppBase):
                 "Brak Bluetooth w tym PC. Użyj Lovense Remote na telefonie (Game Mode)."
             )
         self.controller.start_battery_poll()
+        if self._sink_labels:
+            self.controller.log("Audio: wyjścia: " + "; ".join(self._sink_labels))
+            saved = (self.config.audio_sink or "").strip()
+            if saved and self._audio_default_sink and saved != self._audio_default_sink:
+                self.controller.log(
+                    "Audio: zapisane wyjście nie jest tym domyślnym. "
+                    "Jeśli Firefox gra na głośnikach, wybierz pozycję „domyślne”."
+                )
+        else:
+            self.controller.log("Audio: nie rozpoznano wyjść — zakładka Audio → Odśwież.")
+        if self._source_labels:
+            self.controller.log("Audio: wejścia: " + "; ".join(self._source_labels))
+        if self._app_labels:
+            self.controller.log("Audio: grają teraz: " + "; ".join(self._app_labels))
         if (getattr(self.config, "sl_object_url", "") or "").strip():
             GLib.timeout_add(600, lambda: (self._connect_sl_object() or False))
         if self.config.game_api_enabled:
@@ -1125,59 +1152,108 @@ class Max2GtkApp(_AppBase):
                 "Tryb telefonu: zabawki pojawią się po „Połącz z telefonem” / teście."
             )
 
-    def _apply_phone_backend(self) -> None:
-        url = self._phone_url_from_fields()
-        if not url:
-            self.controller.log("Wpisz IP telefonu z Lovense Remote (Game Mode).")
-            return
-        if hasattr(self, "url_entry"):
-            self.url_entry.set_text(url)
+    def _find_phone(self) -> None:
+        from max2_controller.backends.lovense_local import discover_phone_on_lan
+
+        if hasattr(self, "phone_status_lbl"):
+            self.phone_status_lbl.set_text("Szukam telefonu w sieci domowej…")
 
         def work():
-            self.controller.update_lovense_url(url)
-            self.controller.set_backend("lovense_local")
-            self._ui(self._sync_toy_menu)
-            self._ui(self._test_phone_api)
+            def progress(done: int, total: int) -> None:
+                text = f"Szukam telefonu w sieci domowej… {done}/{total}"
+                self._ui(
+                    lambda text=text: self.phone_status_lbl.set_text(text)
+                    if hasattr(self, "phone_status_lbl")
+                    else None
+                )
+
+            url, toys, result = discover_phone_on_lan(
+                app_name=self.config.app_name,
+                on_progress=progress,
+            )
+            self._finish_phone(url, toys, result, save_on_success=True)
 
         self._bg(work)
 
-    def _test_phone_api(self) -> None:
-        from max2_controller.backends.lovense_local import LovenseLocalBackend
+    def _apply_phone_backend(self) -> None:
+        ip = (self.phone_ip_entry.get_text() or "").strip() if hasattr(self, "phone_ip_entry") else ""
+        if not ip and not (self.url_entry.get_text() or "").strip():
+            self.controller.log("Wpisz IP telefonu z Lovense Remote (Game Mode).")
+            return
+        self._probe_phone(save_on_success=True)
 
-        url = self._phone_url_from_fields() or (self.url_entry.get_text() or "").strip()
-        if not url:
+    def _test_phone_api(self) -> None:
+        self._probe_phone(save_on_success=False)
+
+    def _probe_phone(self, *, save_on_success: bool) -> None:
+        from max2_controller.backends.lovense_local import (
+            LovenseLocalBackend,
+            probe_phone_api,
+        )
+
+        ip = (self.phone_ip_entry.get_text() or "").strip() if hasattr(self, "phone_ip_entry") else ""
+        port = (self.phone_port_entry.get_text() or "30010").strip() if hasattr(self, "phone_port_entry") else "30010"
+        manual = (self.url_entry.get_text() or "").strip() if hasattr(self, "url_entry") else ""
+        if not ip and not manual:
             if hasattr(self, "phone_status_lbl"):
                 self.phone_status_lbl.set_text("Brak IP / URL.")
             return
         if hasattr(self, "phone_status_lbl"):
-            self.phone_status_lbl.set_text(f"Testuję {url} …")
+            self.phone_status_lbl.set_text("Szukam telefonu w sieci…")
 
         def work():
-            be = LovenseLocalBackend(
-                url=url,
-                app_name=self.config.app_name,
-                verify_ssl=False,
-                timeout=4.0,
-            )
-            toys, result = be.get_toys()
-            if result.ok:
-                names = ", ".join(t.display_name for t in toys) or "brak zabawek w apce"
-                msg = f"OK — telefon odpowiada. {names}"
-            else:
-                msg = (
-                    f"Brak odpowiedzi: {result.message}\n"
-                    "Ten sam Wi‑Fi, Game Mode WŁ, Lovense Remote odblokowany."
+            if ip:
+                url, toys, result = probe_phone_api(
+                    ip,
+                    port,
+                    app_name=self.config.app_name,
+                    timeout=2.5,
                 )
-            self.controller.log(msg)
-            self._ui(
-                lambda: self.phone_status_lbl.set_text(msg)
-                if hasattr(self, "phone_status_lbl")
-                else None
-            )
-            if result.ok:
-                self._ui(self._sync_toy_menu)
+            else:
+                be = LovenseLocalBackend(
+                    url=manual,
+                    app_name=self.config.app_name,
+                    verify_ssl=False,
+                    timeout=4.0,
+                )
+                toys, result = be.get_toys()
+                url = manual
+            self._finish_phone(url, toys, result, save_on_success=save_on_success)
 
         self._bg(work)
+
+    def _finish_phone(self, url: str, toys: list, result, *, save_on_success: bool) -> None:
+        from max2_controller.backends.lovense_local import parse_phone_api_url
+
+        if result.ok:
+            names = ", ".join(t.display_name for t in toys) or "brak zabawek w apce"
+            msg = f"OK — telefon odpowiada. {names}"
+            if save_on_success and url:
+                self.controller.update_lovense_url(url)
+                self.controller.set_backend("lovense_local")
+                self.controller.refresh_toys()
+        else:
+            msg = (
+                f"{result.message}\n"
+                "Jeśli szukanie nic nie da: przepisz IP i port z ekranu Game Mode "
+                "i naciśnij „Połącz z wpisanym IP”."
+            )
+        self.controller.log(msg)
+        found_ip, found_port = parse_phone_api_url(url) if url else ("", 0)
+
+        def show() -> None:
+            if hasattr(self, "phone_status_lbl"):
+                self.phone_status_lbl.set_text(msg)
+            if result.ok and url and hasattr(self, "url_entry"):
+                self.url_entry.set_text(url)
+            if result.ok and found_ip and hasattr(self, "phone_ip_entry"):
+                self.phone_ip_entry.set_text(found_ip)
+                if hasattr(self, "phone_port_entry"):
+                    self.phone_port_entry.set_text(str(found_port or 30010))
+            if result.ok:
+                self._sync_toy_menu()
+
+        self._ui(show)
 
     def _on_backend(self, *_args) -> None:
         idx = self.backend_dd.get_selected()
@@ -1821,27 +1897,123 @@ class Max2GtkApp(_AppBase):
 
     # ---- audio / keys ----
     def _audio_mode_name(self) -> str:
-        return "microphone" if self.audio_mode_dd.get_selected() == 1 else "playback"
+        idx = self.audio_mode_dd.get_selected()
+        ids = getattr(self, "_audio_mode_ids", ("playback", "application", "microphone"))
+        if 0 <= idx < len(ids):
+            return ids[idx]
+        return "playback"
+
+    def _rescan_audio_devices(self, log: bool = False) -> None:
+        scan = scan_audio_devices(force=True)
+        self._sink_eps = list(scan.sinks)
+        self._source_eps = list(scan.sources)
+        self._app_eps = list(scan.apps)
+        self._audio_default_sink = scan.default_sink or ""
+        self._audio_default_source = scan.default_source or ""
+        self._sink_labels = endpoint_labels(self._sink_eps, self._audio_default_sink)
+        self._source_labels = endpoint_labels(self._source_eps, self._audio_default_source)
+        self._app_labels = [app.description for app in self._app_eps]
+        self._refresh_audio_device_list()
+        if not log:
+            return
+        mode = self._audio_mode_name()
+        if mode == "microphone":
+            shown = self._source_labels
+            kind = "wejścia"
+        elif mode == "application":
+            shown = self._app_labels
+            kind = "aplikacje"
+        else:
+            shown = self._sink_labels
+            kind = "wyjścia"
+        if not shown:
+            if mode == "application":
+                self.controller.log("Audio: żadna aplikacja teraz nie gra. Włącz dźwięk i Odśwież.")
+            else:
+                self.controller.log("Audio: nie rozpoznano urządzeń (PipeWire / pactl).")
+        else:
+            self.controller.log("Audio: " + kind + ": " + "; ".join(shown))
+
+    def _poll_audio_apps(self) -> bool:
+        """Dopisz aplikację, gdy zacznie grać, bez resetowania wyboru."""
+        if not hasattr(self, "audio_mode_dd"):
+            return False
+        if self._audio_mode_name() != "application":
+            return True
+        if self._audio_dd_guard:
+            return True
+        try:
+            scan = scan_audio_devices(force=True)
+        except Exception:
+            return True
+        new_keys = [app.name for app in scan.apps]
+        old_keys = [app.name for app in self._app_eps]
+        if new_keys != old_keys:
+            self._app_eps = list(scan.apps)
+            self._app_labels = [app.description for app in scan.apps]
+            self._refresh_audio_device_list()
+        return True
 
     def _refresh_audio_device_list(self) -> None:
         mode = self._audio_mode_name()
         if mode == "microphone":
             self.audio_dev_lbl.set_text("Mikrofon:")
-            labels = self._sources
-            prefer = self.config.audio_source or default_source_name() or ""
+            eps = self._source_eps
+            labels = list(self._source_labels)
+            prefer = self.config.audio_source or self._audio_default_source or ""
+            fallback = self._audio_default_source
+            empty = "(brak mikrofonów — Odśwież)"
+        elif mode == "application":
+            self.audio_dev_lbl.set_text("Aplikacja:")
+            eps = self._app_eps
+            labels = list(self._app_labels)
+            prefer = str(getattr(self.config, "audio_app", "") or "")
+            fallback = ""
+            empty = "(żadna aplikacja nie gra — Odśwież)"
         else:
             self.audio_dev_lbl.set_text("Wyjście (Firefox/gry):")
-            labels = self._sinks
-            prefer = self.config.audio_sink or default_sink_name() or ""
-        model = Gtk.StringList.new(labels)
-        self.sink_dd.set_model(model)
-        if prefer in labels:
-            self.sink_dd.set_selected(labels.index(prefer))
-        else:
-            self.sink_dd.set_selected(0)
+            eps = self._sink_eps
+            labels = list(self._sink_labels)
+            prefer = self.config.audio_sink or self._audio_default_sink or ""
+            fallback = self._audio_default_sink
+            empty = "(brak urządzeń — Odśwież)"
+        if not labels:
+            labels = [empty]
+        self._audio_dd_guard = True
+        try:
+            model = Gtk.StringList.new(labels)
+            self.sink_dd.set_expression(
+                Gtk.PropertyExpression.new(Gtk.StringObject, None, "string")
+            )
+            self.sink_dd.set_model(model)
+            idx = 0
+            names = [ep.name for ep in eps]
+            if prefer in names:
+                idx = names.index(prefer)
+            elif fallback in names:
+                idx = names.index(fallback)
+            elif mode == "application" and prefer:
+                if prefer.startswith("proc\t"):
+                    binary = prefer.split("\t", 1)[1]
+                    same = [
+                        i
+                        for i, ep in enumerate(eps)
+                        if getattr(ep, "binary", "") == binary
+                    ]
+                else:
+                    title = prefer.split("\t", 1)[0]
+                    same = [i for i, name in enumerate(names) if name.split("\t", 1)[0] == title]
+                if len(same) == 1:
+                    idx = same[0]
+                elif same:
+                    idx = same[0]
+            if names:
+                self.sink_dd.set_selected(idx)
+        finally:
+            self._audio_dd_guard = False
 
     def _on_audio_mode(self, *_args) -> None:
-        self._refresh_audio_device_list()
+        self._rescan_audio_devices(log=False)
         # jeśli audio włączone — zrestartuj z nowym źródłem
         if self.audio_sw.get_active():
             self.audio.stop(send_zero=False)
@@ -1849,22 +2021,44 @@ class Max2GtkApp(_AppBase):
 
     def _selected_audio_device(self) -> str:
         mode = self._audio_mode_name()
-        labels = self._sources if mode == "microphone" else self._sinks
+        if mode == "microphone":
+            eps = self._source_eps
+            fallback = self._audio_default_source
+        elif mode == "application":
+            eps = self._app_eps
+            fallback = str(getattr(self.config, "audio_app", "") or "")
+        else:
+            eps = self._sink_eps
+            fallback = self._audio_default_sink
         idx = self.sink_dd.get_selected()
-        if 0 <= idx < len(labels):
-            s = labels[idx]
-            if s.startswith("("):
-                return (
-                    (default_source_name() or "")
-                    if mode == "microphone"
-                    else (default_sink_name() or "")
-                )
-            return s
-        return (
-            (default_source_name() or "")
-            if mode == "microphone"
-            else (default_sink_name() or "")
-        )
+        if eps and 0 <= idx < len(eps):
+            return eps[idx].name
+        return fallback or ""
+
+    def _remember_audio_choice(self) -> None:
+        mode = self._audio_mode_name()
+        dev = self._selected_audio_device()
+        self.config.audio_mode = mode
+        if mode == "application":
+            if dev:
+                self.config.audio_app = dev
+        elif mode == "microphone":
+            if dev:
+                self.config.audio_source = dev
+        elif dev:
+            self.config.audio_sink = dev
+        try:
+            self.config.save()
+        except Exception:
+            pass
+
+    def _on_audio_device_selected(self, *_args) -> None:
+        if self._audio_dd_guard:
+            return
+        self._remember_audio_choice()
+        if self.audio_sw.get_active():
+            self.audio.stop(send_zero=False)
+            self._on_audio_sw()
 
     def _on_audio_sw(self, *_args) -> None:
         if getattr(self, "_audio_sw_guard", False):
@@ -1873,7 +2067,10 @@ class Max2GtkApp(_AppBase):
             mode = self._audio_mode_name()
             self.config.audio_mode = mode
             dev = self._selected_audio_device()
-            if mode == "microphone":
+            if mode == "application":
+                if dev:
+                    self.config.audio_app = dev
+            elif mode == "microphone":
                 self.config.audio_source = dev
             else:
                 self.config.audio_sink = dev
@@ -1899,9 +2096,11 @@ class Max2GtkApp(_AppBase):
                     self.audio_sw.set_active(False)
                 finally:
                     self._audio_sw_guard = False
+            elif mode == "application":
+                self.controller.log("Audio: zabawka reaguje tylko na wybraną aplikację.")
             else:
                 self.controller.log(
-                    "Szukaj w logu: „GStreamer → aplikacje/głośniki: ….monitor” — wtedy to NIE mikrofon."
+                    "Szukaj w logu: „GStreamer → całe wyjście: ….monitor” — wtedy to NIE mikrofon."
                 )
         else:
             self.audio.stop(send_zero=True)
@@ -2217,13 +2416,20 @@ class Max2GtkApp(_AppBase):
         if not hasattr(self, "sl_bridge_lbl"):
             return False
         if not br or not br.running:
-            self.sl_bridge_lbl.set_text("Niepołączone z obiektem SL")
+            err = (br.last_error if br else "") or ""
+            self.sl_bridge_lbl.set_text(err or "Niepołączone z obiektem SL")
             return False
         if br.ok:
             self.sl_bridge_lbl.set_text("Połączone z obiektem SL — klik paska steruje zabawką")
         else:
             err = br.last_error or "czekam…"
-            self.sl_bridge_lbl.set_text(f"Szukam obiektu… {err}")
+            if "401" in err:
+                self.sl_bridge_lbl.set_text(
+                    "HTTP 401 — klik kuli → URL, wklej PAIR URL, Połącz "
+                    "(albo Kopiuj skrypt SL i wklej do kuli raz)"
+                )
+            else:
+                self.sl_bridge_lbl.set_text(f"Szukam obiektu… {err}")
         return True
 
     def _copy_sl_script(self, template: str = "LovenseController.lsl") -> None:
@@ -2344,7 +2550,7 @@ class Max2GtkApp(_AppBase):
                         lambda: self._alert(
                             "Cloudflare blokuje Second Life",
                             result.get("message")
-                            or "Zmień tryb tunelu na ngrok / Tailscale Funnel / Named.",
+                            or "Ten adres blokuje Second Life. Kula i tak łączy się przez PAIR URL, nie przez tunel.",
                         )
                     )
             else:
@@ -2852,12 +3058,15 @@ class Max2GtkApp(_AppBase):
         if not hasattr(self, "tunnel_mode_dd"):
             return (self.config.tunnel_mode or "quick").lower()
         idx = int(self.tunnel_mode_dd.get_selected())
-        return {0: "quick", 1: "named", 2: "token", 3: "ngrok", 4: "funnel", 5: "ssh"}.get(
-            idx, "quick"
-        )
+        return {0: "quick", 1: "token", 2: "ssh"}.get(idx, "quick")
+
+    def _sync_tunnel_token_row(self) -> None:
+        if hasattr(self, "tunnel_token_row"):
+            self.tunnel_token_row.set_visible(self._tunnel_mode_str() == "token")
 
     def _on_tunnel_mode_dd(self, *_a) -> None:
         self.config.tunnel_mode = self._tunnel_mode_str()
+        self._sync_tunnel_token_row()
         self.config.save()
 
     def _on_tunnel_auto_sw(self, *_a) -> None:
@@ -2880,7 +3089,7 @@ class Max2GtkApp(_AppBase):
             tun = self._ensure_internet_tunnel()
             ok = tun.login_cloudflare(timeout=180)
             if ok:
-                self.controller.log("Cloudflare login OK — możesz użyć trybu Named")
+                self.controller.log("Cloudflare login OK")
             else:
                 self.controller.log("Cloudflare login nieudany — zobacz status")
 
@@ -3002,10 +3211,9 @@ class Max2GtkApp(_AppBase):
             if not ok:
                 self._ui(lambda: self._set_internet_busy(False))
                 return
-            # named/token: URL od razu; quick: czekaj na trycloudflare
-            wait_s = 45.0 if mode in ("quick", "ngrok", "ssh") else 8.0
+            wait_s = 45.0 if mode in ("quick", "ssh") else 8.0
             url = tun.wait_for_url(timeout=wait_s)
-            if not url and mode in ("quick", "ngrok", "ssh"):
+            if not url and mode in ("quick", "ssh"):
                 self._ui(
                     lambda: self._on_tunnel_error(
                         "Timeout — brak publicznego URL. Sprawdź internet i Log."
@@ -3035,7 +3243,7 @@ class Max2GtkApp(_AppBase):
             # nie czyść ręcznie wpisanego tunnelu usera jeśli nie nasz — tylko gdy pusty lub trycloudflare
             try:
                 cur = (self.sl_tunnel_entry.get_text() or "").strip()
-                if "trycloudflare.com" in cur or "ngrok" in cur or "lhr.life" in cur:
+                if "trycloudflare.com" in cur or "lhr.life" in cur or "localhost.run" in cur:
                     self.sl_tunnel_entry.set_text("")
                     self._update_sl_ui()
             except Exception:

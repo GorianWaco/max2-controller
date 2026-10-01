@@ -18,8 +18,7 @@ if ! python3 -c "import gi" 2>/dev/null; then
     export PYTHONPATH="${ROOT}/src:${VENV_SITE}${PYTHONPATH:+:$PYTHONPATH}"
     exec /usr/bin/python3 -m max2_controller "$@"
   fi
-  echo "Brak PyGObject. Zainstaluj:  sudo pacman -S python-gobject gtk4 libadwaita"
-  echo "Albo:  ./run.sh --web"
+  echo "Brak PyGObject. Program zapyta, czy doinstalować (albo: ./install.sh)."
 fi
 
 exec python3 -m max2_controller "$@"

@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.6.10 — 2026-09-25
+
+Telefon: przycisk **Znajdź i połącz** szuka Lovense Remote (Game Mode) w lokalnej sieci /24 i sam wpisuje IP oraz port. Pole IP nie startuje już od 127.0.0.1.
+
+## 2.6.9 — 2026-09-25
+
+Telefon (Game Mode): „Połącz z telefonem” próbuje adresu z ekranu i sąsiednich portów (HTTPS 30010/30011 oraz HTTP 20010/20011). Podpowiedź w oknie prowadzi przez Discover → Game Mode → LAN.
+
+## 2.6.8 — 2026-09-24
+
+Świeży system: przy starcie program sprawdza GTK, Bluetooth, PipeWire, GStreamer i biblioteki Pythona. Na CachyOS (oraz apt i dnf) proponuje doinstalowanie jednym hasłem. To samo później: `lovense-controller --setup`. Instalator `./install.sh` bierze tę samą listę paczek.
+
+## 2.6.7 — 2026-09-22
+
+Tunel panelu: zostają Cloudflare Quick, Cloudflare Token i SSH localhost.run. Named, ngrok i Tailscale Funnel usunięte.
+
+## 2.6.6 — 2026-09-22
+
+Audio: lista „Jedna aplikacja” obejmuje też włączone programy bez strumienia (Firefox, Brave). Podsłuch startuje, gdy zaczną odtwarzać.
+
+## 2.6.5 — 2026-09-22
+
+Audio: tryb **Jedna aplikacja**. Lista pokazuje to, co właśnie gra (gra, przeglądarka). Zabawka reaguje tylko na wybrany strumień, głośniki dalej grają wszystko.
+
+## 2.6.4 — 2026-09-22
+
+SL: program próbuje kilku adresów kuli (ścieżka `/t/…`, `/?token=`, token w treści POST). 404 na samej ścieżce nie zrywa już połączenia. Kula przyjmuje token, który naprawdę przysyła PC.
+
+Audio: lista urządzeń pokazuje nazwy z systemu (Scarlett, HDMI), nie surowe `alsa_output…`. Przycisk **Odśwież**. Odczyt z PipeWire, a gdy go nie ma — z pactl.
+
+## 2.6.3 — 2026-09-21
+
+SL HTTP 401: token idzie w ścieżce `/t/…` (HTTP-in często gubi query i nagłówki). Przy świeżym PAIR URL kula przyjmuje token z PC, zamiast trzymać stary z linksetu.
+
 ## 2.6.2 — 2026-09-11
 
 `LovenseLook.lsl`: kuleczki ślizgają się po powierzchni orba (nie krążą wokół pozycji spoczynkowej), każda ma własny promień, rozmiar i tempo pulsu. Particle do avatara lecą wolniej i dłużej.

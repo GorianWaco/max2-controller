@@ -270,6 +270,9 @@ Kula siedzi na slocie HUD. Zdejmij i załóż na **Skull** albo **Chest**.
 **Program: „Szukam obiektu” / URL wygasł**  
 Nowy sim albo reset skryptu. Klik kuli → **URL**, wklej świeży PAIR URL. Wear sam linka nie wypisuje.
 
+**Program: HTTP 401**  
+Kula ma stary token albo stary skrypt. **Zdalne → Kopiuj skrypt SL**, wklej go do kuli (zastąp poprzedni), potem klik kuli → **URL**, wklej PAIR URL → **Połącz**.
+
 **Klik działa, Horny nie rośnie**  
 W kuli muszą być **dwa** skrypty (kontroler + potrzeby), oba Running.
 

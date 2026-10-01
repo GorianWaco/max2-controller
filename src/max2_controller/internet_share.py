@@ -239,12 +239,8 @@ class InternetTunnel:
         return None
 
     @staticmethod
-    def ngrok_path() -> str | None:
-        return shutil.which("ngrok")
-
-    @staticmethod
     def has_any_tunnel_binary() -> bool:
-        return bool(InternetTunnel.cloudflared_path() or InternetTunnel.ngrok_path())
+        return bool(InternetTunnel.cloudflared_path())
 
     @staticmethod
     def install_hint() -> str:
@@ -321,105 +317,6 @@ class InternetTunnel:
         except Exception as e:
             return 1, str(e)
 
-    def list_named_tunnels(self) -> list[dict]:
-        """[{id, name}, …] z `cloudflared tunnel list`."""
-        code, out = self._run_cf(["tunnel", "list"], timeout=30)
-        if code != 0:
-            return []
-        rows = []
-        for line in out.splitlines():
-            # ID NAME CREATED CONNECTIONS
-            parts = line.split()
-            if len(parts) >= 2 and re.match(
-                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                parts[0],
-                re.I,
-            ):
-                rows.append({"id": parts[0], "name": parts[1]})
-        return rows
-
-    def ensure_named_tunnel(self, name: str, hostname: str, local_port: int) -> tuple[bool, str, str]:
-        """
-        Utwórz named tunnel + DNS + config.yml.
-        Zwraca (ok, tunnel_id, public_url_or_error).
-        Wymaga: login + domena w Cloudflare + hostname.
-        """
-        name = (name or "lovense-controller").strip()
-        hostname = (hostname or "").strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
-        if not hostname or "." not in hostname:
-            return False, "", "Podaj hostname DNS w Cloudflare (np. lovense.twojadomena.com)"
-        if not self.is_logged_in():
-            if not self.login_cloudflare():
-                return False, "", "Najpierw zaloguj Cloudflare (cert.pem)"
-        try:
-            cf = self.ensure_ready()
-        except Exception as e:
-            return False, "", str(e)
-
-        tunnels = self.list_named_tunnels()
-        tid = ""
-        for t in tunnels:
-            if t["name"] == name:
-                tid = t["id"]
-                break
-        if not tid:
-            self._progress(f"Tworzę named tunnel „{name}”…")
-            code, out = self._run_cf(["tunnel", "create", name], timeout=60)
-            if code != 0:
-                return False, "", f"create tunnel: {out[-400:]}"
-            # Created tunnel NAME with id UUID
-            m = re.search(
-                r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-                out,
-                re.I,
-            )
-            if not m:
-                # list again
-                for t in self.list_named_tunnels():
-                    if t["name"] == name:
-                        tid = t["id"]
-                        break
-            else:
-                tid = m.group(1)
-            if not tid:
-                return False, "", f"Nie odczytano UUID tunnelu: {out[-300:]}"
-            self._progress(f"Tunnel utworzony: {tid}")
-        else:
-            self._progress(f"Tunnel „{name}” już istnieje ({tid})")
-
-        # DNS route
-        self._progress(f"DNS: {hostname} → tunnel {name}")
-        code, out = self._run_cf(["tunnel", "route", "dns", name, hostname], timeout=60)
-        if code != 0 and "already exists" not in (out or "").lower() and "CNAME" not in out:
-            # często OK gdy rekord już jest
-            if "error" in (out or "").lower() or "failed" in (out or "").lower():
-                self._log(f"route dns ostrzeżenie: {out[-300:]}")
-
-        # config.yml
-        cred = _CLOUDFLARED_DIR / f"{tid}.json"
-        if not cred.is_file():
-            # credentials czasem w innym miejscu
-            alt = list(_CLOUDFLARED_DIR.glob(f"*{tid}*.json")) if _CLOUDFLARED_DIR.is_dir() else []
-            if alt:
-                cred = alt[0]
-            else:
-                return False, tid, f"Brak pliku credentials: {cred}"
-
-        _APP_CF_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        yml = (
-            f"tunnel: {tid}\n"
-            f"credentials-file: {cred}\n"
-            f"\n"
-            f"ingress:\n"
-            f"  - hostname: {hostname}\n"
-            f"    service: http://127.0.0.1:{int(local_port)}\n"
-            f"  - service: http_status:404\n"
-        )
-        _APP_CF_CONFIG.write_text(yml, encoding="utf-8")
-        public = f"https://{hostname}"
-        self._progress(f"Config zapisany → {public}")
-        return True, tid, public
-
     def start(
         self,
         local_port: int,
@@ -434,12 +331,9 @@ class InternetTunnel:
     ) -> bool:
         """
         mode:
-          quick  — trycloudflare (URL losowy; przeglądarka OK, SL często blokowany)
-          named  — stały hostname (wymaga domeny CF + login)
-          token  — cloudflared tunnel run --token … (Zero Trust)
-          ngrok  — ngrok http PORT (lepszy do Second Life)
-          funnel — Tailscale Funnel
-          ssh    — localhost.run (SSH reverse; fallback pod SL)
+          quick — losowy adres trycloudflare, bez konta
+          token — cloudflared tunnel run --token (Zero Trust)
+          ssh   — localhost.run, bez konta
         """
         self.stop()
         self.error = None
@@ -447,40 +341,21 @@ class InternetTunnel:
         self.kind = None
         self._stop_flag.clear()
         mode = (mode or "quick").lower().strip()
+        if mode not in ("quick", "token", "ssh"):
+            mode = "quick"
 
         cf = self.cloudflared_path()
-        ng = self.ngrok_path()
 
-        if prefer in ("auto", "cloudflared") and not cf and auto_install:
+        if mode in ("quick", "token") and not cf and auto_install:
             try:
                 cf = self.ensure_ready()
             except Exception as e:
                 self._emit_error(str(e))
-                if prefer == "auto" and ng and mode == "quick":
-                    pass
-                else:
-                    return False
+                return False
 
         cmd: list[str] | None = None
         kind = ""
         preset_url = ""
-
-        if mode == "funnel":
-            self._progress("Startuję Tailscale Funnel…")
-            ok, pub_or_err = start_tailscale_funnel(local_port)
-            if not ok:
-                self._emit_error(pub_or_err)
-                return False
-            self.kind = "tailscale-funnel"
-            with self._lock:
-                self.public_base = pub_or_err
-            self._progress(f"Publiczny URL (Funnel): {pub_or_err}")
-            if self.on_url:
-                try:
-                    self.on_url(pub_or_err, self.kind)
-                except Exception:
-                    logger.exception("on_url")
-            return True
 
         if mode == "ssh":
             if not shutil.which("ssh"):
@@ -501,16 +376,6 @@ class InternetTunnel:
             ]
             kind = "localhost.run"
 
-        elif mode == "ngrok":
-            if not ng:
-                self._emit_error(
-                    "Brak ngrok. Zainstaluj: https://ngrok.com/download "
-                    "albo: yay -S ngrok"
-                )
-                return False
-            cmd = [ng, "http", str(int(local_port)), "--log=stdout", "--log-format=logfmt"]
-            kind = "ngrok"
-
         elif mode == "token":
             if not cf:
                 self._emit_error(self.install_hint())
@@ -528,43 +393,18 @@ class InternetTunnel:
             if preset_url and not preset_url.startswith("http"):
                 preset_url = "https://" + preset_url
 
-        elif mode == "named":
+        else:
             if not cf:
                 self._emit_error(self.install_hint())
                 return False
-            ok, tid, pub_or_err = self.ensure_named_tunnel(tunnel_name, hostname, local_port)
-            if not ok:
-                self._emit_error(pub_or_err)
-                return False
-            preset_url = pub_or_err.rstrip("/")
             cmd = [
                 cf,
                 "tunnel",
-                "--config",
-                str(_APP_CF_CONFIG),
+                "--url",
+                f"http://127.0.0.1:{int(local_port)}",
                 "--no-autoupdate",
-                "run",
-                tid or tunnel_name,
             ]
-            kind = "cloudflared-named"
-
-        else:
-            # quick
-            if prefer in ("auto", "cloudflared") and cf:
-                cmd = [
-                    cf,
-                    "tunnel",
-                    "--url",
-                    f"http://127.0.0.1:{int(local_port)}",
-                    "--no-autoupdate",
-                ]
-                kind = "cloudflared"
-            elif prefer in ("auto", "ngrok") and ng:
-                cmd = [ng, "http", str(int(local_port)), "--log=stdout", "--log-format=logfmt"]
-                kind = "ngrok"
-            else:
-                self._emit_error(self.install_hint())
-                return False
+            kind = "cloudflared"
 
         self._progress(f"Startuję tunnel ({kind}, mode={mode})…")
         try:
@@ -631,19 +471,12 @@ class InternetTunnel:
                     elif mode == "quick":
                         pass
                 else:
-                    m = (
-                        _NGROK_URL_RE.search(line)
-                        or _LHR_URL_RE.search(line)
-                        or _TS_URL_RE.search(line)
-                        or _CF_URL_RE.search(line)
-                    )
+                    m = _LHR_URL_RE.search(line) or _CF_URL_RE.search(line)
                     if m:
                         url = m.group(0)
 
                 if url and (not self.public_base or mode == "quick"):
-                    # quick: nadpisz gdy pojawi się trycloudflare
-                    # named: nie nadpisuj stałego hostname
-                    if mode in ("named", "token") and self.public_base:
+                    if mode == "token" and self.public_base:
                         continue
                     with self._lock:
                         self.public_base = url.rstrip("/")
@@ -903,10 +736,9 @@ def probe_sl_http(base_url: str, token: str = "", timeout: float = 10.0) -> dict
             if cf or "<html" in low or "just a moment" in low:
                 out["sl_blocked"] = True
                 out["message"] = (
-                    "Cloudflare Bot Fight blokuje Second Life (LSL). "
-                    "Przeglądarka może działać, HUD nie. "
-                    "Użyj: ngrok, Tailscale Funnel albo Named tunnel "
-                    "(wyłącz Bot Fight na domenie)."
+                    "Cloudflare blokuje zapytania z Second Life. "
+                    "Kula łączy się przez PAIR URL, nie przez ten tunel. "
+                    "Przeglądarka partnerki może działać."
                 )
                 return out
         if code in (401,):
@@ -924,43 +756,6 @@ def probe_sl_http(base_url: str, token: str = "", timeout: float = 10.0) -> dict
     except Exception as e:
         out["message"] = f"SL probe błąd: {e}"
         return out
-
-
-def start_tailscale_funnel(local_port: int) -> tuple[bool, str]:
-    """Włącz Tailscale Funnel na porcie panelu. Zwraca (ok, url_or_error)."""
-    path = shutil.which("tailscale")
-    if not path:
-        return False, "Brak tailscale — sudo pacman -S tailscale && sudo tailscale up"
-    try:
-        subprocess.check_output(
-            [path, "funnel", "--bg", str(int(local_port))],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=25,
-        )
-    except subprocess.CalledProcessError as e:
-        out = (e.output or str(e)).strip()
-        # już włączony bywa exit != 0
-        if "already" not in out.lower() and "on" not in out.lower():
-            return False, f"tailscale funnel: {out[-400:]}"
-    except Exception as e:
-        return False, f"tailscale funnel: {e}"
-    try:
-        st = subprocess.check_output(
-            [path, "funnel", "status"],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=12,
-        )
-    except Exception as e:
-        return False, f"funnel status: {e}"
-    m = _TS_URL_RE.search(st or "")
-    if m:
-        return True, m.group(0).rstrip("/")
-    m = _HTTPS_URL_RE.search(st or "")
-    if m:
-        return True, m.group(0).rstrip("/")
-    return False, f"Nie odczytano URL Funnel:\n{(st or '')[:300]}"
 
 
 def build_public_panel_link(public_base: str, token: str) -> str:

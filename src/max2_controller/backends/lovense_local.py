@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
@@ -36,21 +38,226 @@ def has_ble_adapter() -> bool:
         return False
 
 
-def build_phone_api_url(ip: str, port: int | str = 30010) -> str:
-    """IP telefonu + port z Game Mode → URL Standard API."""
+def _split_host_port(ip: str, port: int | str = 30010) -> tuple[str, int]:
+    """Z wpisu użytkownika zostaw IP z kropkami i numer portu."""
     host = (ip or "").strip()
     host = host.replace("https://", "").replace("http://", "")
-    host = host.split("/")[0].split(":")[0]
-    host = host.replace(".", "-")
+    host = host.split("/")[0]
+    if host.endswith(".lovense.club"):
+        host = host[: -len(".lovense.club")]
+    if ":" in host and host.count(":") == 1 and not host.startswith("["):
+        host, embedded = host.rsplit(":", 1)
+        if embedded.isdigit() and (port in ("", None, 0)):
+            port = embedded
+    host = host.split(":")[0]
+    if re.fullmatch(r"\d+(?:-\d+){3}", host):
+        host = host.replace("-", ".")
     try:
-        p = int(port)
+        parsed = int(port)
     except (TypeError, ValueError):
-        p = 30010
-    if p <= 0:
-        p = 30010
-    if host in {"127-0-0-1", "localhost"}:
-        return f"http://127.0.0.1:{p}/command"
-    return f"https://{host}.lovense.club:{p}/command"
+        parsed = 30010
+    if parsed <= 0:
+        parsed = 30010
+    return host, parsed
+
+
+def build_phone_api_url(ip: str, port: int | str = 30010) -> str:
+    """IP telefonu + port z Game Mode → URL Standard API."""
+    host, parsed = _split_host_port(ip, port)
+    dashed = host.replace(".", "-")
+    if dashed in {"127-0-0-1", "localhost"} or host in {"localhost"}:
+        return f"http://127.0.0.1:{parsed}/command"
+    return f"https://{dashed}.lovense.club:{parsed}/command"
+
+
+def phone_api_candidates(ip: str, port: int | str = 30010) -> list[str]:
+    """Adresy Game Mode w kolejności prób.
+
+    Telefon słucha zwykle pary HTTP 20010 i HTTPS 30010 (albo 20011/30011).
+    Certyfikat jest na *.lovense.club, więc HTTPS idzie przez tę nazwę,
+    a HTTP wprost na IP.
+    """
+    host, parsed = _split_host_port(ip, port)
+    if not host:
+        return []
+    dashed = host.replace(".", "-")
+    if dashed in {"127-0-0-1", "localhost"} or host == "localhost":
+        return [f"http://127.0.0.1:{parsed}/command"]
+
+    urls: list[str] = []
+
+    def add(url: str) -> None:
+        if url not in urls:
+            urls.append(url)
+
+    def add_http(port_n: int) -> None:
+        if port_n > 0:
+            add(f"http://{host}:{port_n}/command")
+
+    def add_https(port_n: int) -> None:
+        if port_n > 0:
+            add(f"https://{dashed}.lovense.club:{port_n}/command")
+
+    if parsed >= 30000:
+        add_https(parsed)
+        if 30000 <= parsed <= 30100:
+            add_http(parsed - 10000)
+    else:
+        add_http(parsed)
+        if 20000 <= parsed <= 20100:
+            add_https(parsed + 10000)
+    add_https(30010)
+    add_http(20010)
+    add_https(30011)
+    add_http(20011)
+    return urls[:4]
+
+
+def probe_phone_api(
+    ip: str,
+    port: int | str = 30010,
+    *,
+    app_name: str = "Max2Controller",
+    timeout: float = 2.5,
+) -> tuple[str, list[ToyInfo], CommandResult]:
+    """Pierwszy adres, który odpowie na GetToys. Ostatnia porażka, gdy żaden."""
+    from max2_controller.models import CommandResult as _CommandResult
+
+    urls = phone_api_candidates(ip, port)
+    if not urls:
+        return "", [], _CommandResult(ok=False, message="Wpisz IP telefonu z Game Mode.")
+    last_url = urls[0]
+    last_toys: list[ToyInfo] = []
+    last = _CommandResult(ok=False, message="Brak odpowiedzi")
+    for url in urls:
+        backend = LovenseLocalBackend(
+            url=url,
+            app_name=app_name,
+            verify_ssl=False,
+            timeout=timeout,
+        )
+        toys, result = backend.get_toys()
+        last_url, last_toys, last = url, toys, result
+        if result.ok:
+            return url, toys, result
+    tried = ", ".join(urls)
+    last.message = f"{last.message} Próby: {tried}"
+    return last_url, last_toys, last
+
+
+_GAME_PORTS = (20010, 30010, 20011, 30011)
+
+
+def primary_ipv4() -> str:
+    """Adres, którym ten komputer wychodzi do sieci (nie 127.0.0.1)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        sock.close()
+
+
+def lan_hosts(ip: str) -> list[str]:
+    """Pozostałe adresy z tej samej sieci /24."""
+    parts = (ip or "").split(".")
+    if len(parts) != 4 or not all(part.isdigit() for part in parts):
+        return []
+    prefix = ".".join(parts[:3])
+    own = int(parts[3])
+    return [f"{prefix}.{index}" for index in range(1, 255) if index != own]
+
+
+def _tcp_open(ip: str, port: int, timeout: float) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((ip, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _url_for_game_port(ip: str, port: int) -> str:
+    if port >= 30000:
+        return build_phone_api_url(ip, port)
+    return f"http://{ip}:{port}/command"
+
+
+def discover_phone_on_lan(
+    *,
+    app_name: str = "Max2Controller",
+    connect_timeout: float = 0.25,
+    workers: int = 80,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[str, list[ToyInfo], CommandResult]:
+    """Szuka Lovense Remote (Game Mode) w lokalnej sieci /24.
+
+    Najpierw szybkie sprawdzenie portów, potem GetToys tylko tam, gdzie ktoś słucha.
+    """
+    me = primary_ipv4()
+    if not me or me.startswith("127."):
+        return "", [], CommandResult(
+            ok=False,
+            message="Ten komputer nie ma adresu w sieci lokalnej.",
+        )
+    hosts = lan_hosts(me)
+    if not hosts:
+        return "", [], CommandResult(ok=False, message=f"Nie umiem przeszukać sieci {me}.")
+
+    jobs = [(host, port) for host in hosts for port in _GAME_PORTS]
+    total = len(jobs)
+    open_ports: list[tuple[str, int]] = []
+    done = 0
+
+    def poke(host: str, port: int) -> tuple[str, int] | None:
+        if _tcp_open(host, port, connect_timeout):
+            return host, port
+        return None
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(poke, host, port) for host, port in jobs]
+        for future in as_completed(futures):
+            done += 1
+            if on_progress and (done == total or done % 40 == 0):
+                try:
+                    on_progress(done, total)
+                except Exception:
+                    logger.exception("discover progress")
+            try:
+                hit = future.result()
+            except Exception:
+                hit = None
+            if hit:
+                open_ports.append(hit)
+
+    open_ports.sort(key=lambda item: (0 if item[1] < 30000 else 1, item[1], item[0]))
+    for host, port in open_ports:
+        url = _url_for_game_port(host, port)
+        backend = LovenseLocalBackend(
+            url=url,
+            app_name=app_name,
+            verify_ssl=False,
+            timeout=2.0,
+        )
+        toys, result = backend.get_toys()
+        if result.ok:
+            return url, toys, result
+
+    network = me.rsplit(".", 1)[0] + ".0/24"
+    if open_ports:
+        message = "Ktoś słucha na porcie Game Mode, ale to nie jest Lovense Remote."
+    else:
+        message = (
+            f"Nie znalazłem telefonu w sieci {network}. "
+            "W Lovense Remote: Discover → Game Mode → włącz LAN. "
+            "Ten sam Wi-Fi, nie sieć gościnna, VPN wyłączony."
+        )
+    return "", [], CommandResult(ok=False, message=message)
 
 
 def parse_phone_api_url(url: str) -> tuple[str, int]:

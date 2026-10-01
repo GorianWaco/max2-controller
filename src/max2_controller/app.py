@@ -12,10 +12,6 @@ _SRC = Path(__file__).resolve().parent.parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from max2_controller.config import AppConfig
-from max2_controller.controller import Max2Controller
-from max2_controller.hotkeys import HotkeyManager
-
 
 def _gtk_available() -> tuple[bool, str]:
     try:
@@ -38,7 +34,8 @@ def _print_gtk_help(err: str) -> None:
 │  {err[:56]:<56} │
 │                                                             │
 │  Na CachyOS / Arch:                                         │
-│      sudo pacman -S python-gobject gtk4 libadwaita          │
+│      ./install.sh                                           │
+│      albo:  lovense-controller --setup                      │
 │                                                             │
 │  venv MUSI widzieć pakiety systemowe:                       │
 │      python3 -m venv --system-site-packages .venv           │
@@ -47,6 +44,12 @@ def _print_gtk_help(err: str) -> None:
 └─────────────────────────────────────────────────────────────┘
 """.strip()
     )
+
+
+def _print_import_help(exc: BaseException) -> None:
+    print(f"Brak biblioteki: {exc}")
+    print("Doinstaluj:  lovense-controller --setup")
+    print("albo:        ./install.sh")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -58,7 +61,32 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Max 2 Controller (GTK)")
     parser.add_argument("--web", action="store_true", help="Panel w przeglądarce")
     parser.add_argument("--gtk", action="store_true", help="Wymuś okno GTK (domyślne)")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Sprawdź zależności i doinstaluj braki",
+    )
+    parser.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="Nie sprawdzaj zależności przy starcie",
+    )
     args = parser.parse_args(argv)
+
+    if not args.skip_setup:
+        from max2_controller.setup_check import ensure_ready
+
+        if ensure_ready(force=args.setup) == "exit":
+            return
+
+    from max2_controller.config import AppConfig
+    from max2_controller.hotkeys import HotkeyManager
+
+    try:
+        from max2_controller.controller import Max2Controller
+    except ImportError as exc:
+        _print_import_help(exc)
+        return
 
     config = AppConfig.load()
     controller = Max2Controller(config)
@@ -67,8 +95,11 @@ def main(argv: list[str] | None = None) -> None:
         hotkeys.start()
 
     if args.web:
-        from max2_controller.web_mode import run_web_mode
-
+        try:
+            from max2_controller.web_mode import run_web_mode
+        except ImportError as exc:
+            _print_import_help(exc)
+            return
         run_web_mode(controller, config, hotkeys=hotkeys)
         return
 
@@ -83,12 +114,19 @@ def main(argv: list[str] | None = None) -> None:
         except KeyboardInterrupt:
             print("Anulowano.")
             return
-        from max2_controller.web_mode import run_web_mode
-
+        try:
+            from max2_controller.web_mode import run_web_mode
+        except ImportError as exc:
+            _print_import_help(exc)
+            return
         run_web_mode(controller, config, hotkeys=hotkeys)
         return
 
-    from max2_controller.gui.gtk_window import run_gtk
+    try:
+        from max2_controller.gui.gtk_window import run_gtk
+    except ImportError as exc:
+        _print_import_help(exc)
+        return
 
     run_gtk(controller, config, hotkeys=hotkeys)
 

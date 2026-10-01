@@ -12,7 +12,9 @@ Nie wymaga telefonu (Bluetooth bezpośrednio z PC).
 curl -fsSL https://raw.githubusercontent.com/GorianWaco/max2-controller/main/install.sh | bash
 ```
 
-To doinstaluje GTK/BLE i wrzuci skrót do menu.
+To doinstaluje GTK, Bluetooth i dźwięk (PipeWire, GStreamer) i wrzuci skrót do menu.
+
+Na CachyOS wystarczy ta jedna komenda. Przy pierwszym uruchomieniu program jeszcze raz sprawdzi, czego brakuje, i sam zaproponuje instalację. Później: `lovense-controller --setup`.
 
 ### Flatpak (łatwiej wysłać gotową paczkę)
 
